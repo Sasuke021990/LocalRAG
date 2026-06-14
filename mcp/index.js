@@ -37,11 +37,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             top_k: {
               type: "number",
-              description: "Number of initial document chunks to retrieve before reranking (default: 10).",
+              description: "Number of initial document chunks to retrieve before reranking (default: 30).",
             },
             rerank_top_k: {
               type: "number",
-              description: "Number of highly relevant chunks to use for the final answer (default: 5).",
+              description: "Number of highly relevant chunks to use for the final answer (default: 15).",
             },
           },
           required: ["query"],
@@ -58,7 +58,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!request.params.arguments || !request.params.arguments.query) {
         throw new Error("Missing required argument 'query'. You must provide a search query.");
       }
-      const { query, top_k = 10, rerank_top_k = 5 } = request.params.arguments;
+      const { query, top_k = 30, rerank_top_k = 15 } = request.params.arguments;
       
       const response = await axios.post(`${API_URL}/query`, {
         query,

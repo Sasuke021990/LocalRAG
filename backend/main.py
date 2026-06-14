@@ -318,8 +318,11 @@ async def query_documents(request: QueryRequest):
         results = hybrid_search.search(query=request.query, top_k=request.top_k)
 
         # 3. Re-rank
-        logger.info("Re-ranking with cross-encoder …")
-        reranked = reranker.rerank(query=request.query, results=results[:request.rerank_top_k])
+        if request.rerank_top_k > 0:
+            logger.info("Re-ranking with cross-encoder …")
+            reranked = reranker.rerank(query=request.query, results=results, top_k=request.rerank_top_k)
+        else:
+            reranked = results
 
         # 4. Build a structured retrieval summary.
         # This is a semantic knowledge retrieval system — results are ranked

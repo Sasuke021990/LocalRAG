@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis/redis-stack:7.2.0-v10
+    container_name: local-rag-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      # Map this to a TrueNAS dataset for your Vector database
+      - /mnt/your-pool/localrag/redis:/data
+    command: redis-stack-server --appendonly yes
+    environment:
+      - REDIS_ARGS=--appendonly yes
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # image: yourusername/localrag-backend:latest
+    container_name: local-rag-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    volumes:
+      # Map this to your TrueNAS dataset for embedded files / JSON backups
+      - /mnt/your-pool/localrag/knowledge:/app/data
+    
+    # Optional NVIDIA GPU Support for TrueNAS
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    # image: yourusername/localrag-frontend:latest
+    container_name: local-rag-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - PORT=3000
+    restart: unless-stopped

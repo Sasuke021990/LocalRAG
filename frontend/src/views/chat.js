@@ -41,10 +41,11 @@ export function initChat() {
 
         try {
             const topK = parseInt(topKSlider.value);
-            const rerankTopK = useReranker.checked ? Math.max(1, Math.ceil(topK / 2)) : 0;
+            const fetchK = useReranker.checked ? topK * 2 : topK;
+            const rerankTopK = useReranker.checked ? topK : 0;
             
             // POST /query {query, top_k, rerank_top_k}
-            const res = await sendQuery(query, topK, rerankTopK);
+            const res = await sendQuery(query, fetchK, rerankTopK);
             document.getElementById(loadingId)?.remove();
 
             appendMessage('ai', res.answer || 'No answer generated.');
