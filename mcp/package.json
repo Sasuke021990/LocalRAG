@@ -1,0 +1,14 @@
+{
+  "name": "localrag-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for querying LocalRAG",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.5.0",
+    "axios": "^1.6.0"
+  }
+}

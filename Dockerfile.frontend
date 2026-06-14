@@ -1,0 +1,43 @@
+# =========================================================
+# Stage 1: builder — install deps & compile Vite assets
+# =========================================================
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files first for layer caching
+COPY frontend/package*.json ./
+
+# Install ALL dependencies (including devDependencies for Vite build)
+RUN npm ci
+
+# Copy source files
+COPY frontend/ .
+
+# Build Vite production bundle → /app/dist
+RUN npm run build
+
+# =========================================================
+# Stage 2: runner — lean production image with Express
+# =========================================================
+FROM node:22-alpine AS runner
+
+WORKDIR /app
+
+# Copy only production package files
+COPY frontend/package*.json ./
+
+# Install only production dependencies (Express, http-proxy-middleware)
+RUN npm ci --omit=dev
+
+# Copy the compiled static assets from builder stage
+COPY --from=builder /app/dist ./dist
+
+# Copy the Express server
+COPY frontend/server.js ./server.js
+
+# Expose the Express port
+EXPOSE 3000
+
+# Start the Express server
+CMD ["node", "server.js"]

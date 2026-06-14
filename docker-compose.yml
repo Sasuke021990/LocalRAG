@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Redis Stack for vector storage and caching
+  redis:
+    image: redis/redis-stack:7.2.0-v10
+    container_name: local-rag-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"  # RedisInsight web UI
+    volumes:
+      - redis_data:/data
+    command: redis-stack-server --appendonly yes
+    environment:
+      - REDIS_ARGS=--appendonly yes
+    restart: unless-stopped
+
+  # Backend API service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: local-rag-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+    volumes:
+      # Mount the knowledge base directory for file storage
+      - D:\DockerData\MyKnowledge:/app/data
+      # Mount WSL library for AMD DirectML support on Windows
+      - /usr/lib/wsl:/usr/lib/wsl
+    # GPU Acceleration Setup:
+    # 1. For AMD GPUs (Windows/WSL2 DirectML):
+    devices:
+      - /dev/dxg:/dev/dxg
+    # 2. For NVIDIA GPUs, uncomment below instead of devices above:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+  # Frontend service (Vite + Express app)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: local-rag-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - PORT=3000
+    restart: unless-stopped
+
+volumes:
+  redis_data:

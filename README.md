@@ -1,0 +1,93 @@
+# LocalRAG v2.0 - Private Knowledge Intelligence
+
+A production-ready local Retrieval-Augmented Generation (RAG) application with **hybrid search**, **cross-encoder re-ranking**, and **semantic caching**. 
+
+Version 2.0 introduces a brand new **RAGFlow-inspired dark aesthetic UI**, a **Category Management System**, and a robust **Dual-Storage architecture** that guarantees zero data loss across container restarts.
+
+## 🎯 Key Features
+
+### 🎨 RAGFlow-Inspired Interface
+- **Dark Glassmorphism & Minimalist UI**: Pure black canvas (`#050508`) with sharp teal (`#10e8b8`) accents and a subtle grid overlay.
+- **Live Stats Dashboard**: Track indexed documents, categories, and API health in real-time.
+- **Interactive Chat**: View retrieved chunks, exact relevance scores, and source document metadata instantly alongside your answers.
+
+### 🧠 Advanced RAG Pipeline
+- **Hybrid Retrieval**: Combines BM25 (sparse keyword search) and Vector (dense semantic search) using Reciprocal Rank Fusion (RRF) for unmatched accuracy.
+- **Cross-Encoder Re-ranking**: Passes the top-K hybrid results through `ms-marco-MiniLM` to re-score and re-order them based on deep contextual relevance.
+- **Semantic Caching**: Redis-backed caching instantly returns answers for repeated or semantically identical queries, skipping the LLM generation step.
+
+### 📂 Knowledge Management & Dual-Storage
+- **Category System**: Organize documents into custom categories (e.g., `Finance`, `Legal`, `Research`).
+- **Robust Persistence**: 
+  - **Redis Stack** acts as the high-speed volatile layer for vector search.
+  - **JSON Backups** act as the durable storage layer. Every document processed is saved as a structured JSON file to your mapped host volume (`D:\DockerData\MyKnowledge\`).
+- **Auto Re-indexing**: If the Docker containers are destroyed or volumes are pruned, the system automatically reads the JSON backups on the next startup and fully restores the Redis index. Zero data loss.
+- **Secure Processing**: The original uploaded files are automatically deleted after successful parsing and ingestion.
+
+## 🏗️ Architecture
+
+```
+Frontend (Streamlit :8501)
+        |  HTTP
+        v
+Backend (FastAPI :8000)
+  |-- Ingestion Pipeline (PDF, DOCX, TXT, CSV, MD, HTML, JSON, XML)
+  |-- Retrieval Engine (BM25 + Vector + Cross-Encoder Reranker)
+  |-- Semantic Cache
+        v
+Redis Stack (:6379)  <-- Sub-millisecond Vector & Cache Store
+        v
+Mounted Host Volume (D:\DockerData\MyKnowledge\) <-- Durable JSON Backups
+```
+
+## 🛠️ Installation & Setup
+
+### Prerequisites
+- Docker and Docker Compose
+- Windows Host (or Linux/Mac with path adjustments in `docker-compose.yml`)
+- At least 8GB RAM (16GB+ recommended for loading multiple ML models)
+
+### Quick Start
+
+1. **Clone the repository**
+```bash
+git clone <repository-url>
+cd LocalRAG
+```
+
+2. **Ensure your host volume directory exists** (Windows default)
+```powershell
+New-Item -ItemType Directory -Force -Path "D:\DockerData\MyKnowledge"
+```
+
+3. **Start the application**
+```bash
+docker-compose up --build -d
+```
+
+4. **Access the Application**
+- **UI Dashboard**: `http://localhost:8501`
+- **Interactive API Docs (Swagger)**: `http://localhost:8000/docs`
+- **RedisInsight**: `http://localhost:8001`
+
+## 🚀 Usage Guide
+
+1. **Create Categories**: Go to the **Knowledge Base** tab and create folders for your data.
+2. **Upload Documents**: Select a category, tweak chunk sizes if necessary, and drop your files. Ingestion happens asynchronously in the background.
+3. **Query**: Go to the **Chat** tab, adjust your Retrieve (Top-K) and Re-rank sliders, and ask questions.
+4. **Manage Data**: Delete documents directly from the UI library to completely wipe them from both Redis and the disk backup.
+
+## 🔧 Under the Hood: The ML Stack
+
+- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (Fast, 384-dimensional dense vectors)
+- **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2` (Deep contextual similarity scoring)
+- **Vector DB**: `Redis Stack` (RediSearch + RedisJSON)
+
+## 🛡️ Security & Privacy
+
+- **100% Local**: No cloud dependencies, no telemetry, no external API calls (e.g., OpenAI). Your documents never leave your machine.
+- **Auto-Cleanup**: Your original raw documents are deleted from the server the second they finish chunking and vectorizing.
+
+## 📝 Detailed Documentation
+
+For a comprehensive breakdown of the API endpoints, storage survival matrix, data flow, and troubleshooting, please refer to the detailed [DOCUMENTATION.md](./DOCUMENTATION.md) included in this repository.
