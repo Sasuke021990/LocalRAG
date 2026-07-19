@@ -8,6 +8,8 @@ import axios from "axios";
 
 // Default to the docker-compose backend endpoint if not specified
 const API_URL = process.env.LOCALRAG_API_URL || "http://127.0.0.1:8000";
+// Required only if the backend has API_KEY set (auth disabled by default)
+const API_KEY = process.env.LOCALRAG_API_KEY || "";
 
 const server = new Server(
   {
@@ -64,6 +66,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         query,
         top_k,
         rerank_top_k
+      }, {
+        headers: API_KEY ? { "x-api-key": API_KEY } : {},
       });
 
       const data = response.data;
