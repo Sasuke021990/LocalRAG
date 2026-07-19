@@ -27,13 +27,12 @@ def _unit_vector(hot_index: int) -> list:
 
 
 @pytest.fixture(autouse=True)
-def _require_vector_support(redisearch_vector_available):
+def _ensure_index(redis_client, redisearch_vector_available):
+    # Depending on redisearch_vector_available (rather than two independent
+    # autouse fixtures) guarantees the skip is evaluated before ensure_index
+    # runs -- pytest does not otherwise order same-scope autouse fixtures.
     if not redisearch_vector_available:
         pytest.skip("RediSearch VECTOR field support not available (needs redis-stack)")
-
-
-@pytest.fixture(autouse=True)
-def _ensure_index(redis_client):
     vector_index.ensure_index(redis_client)
 
 

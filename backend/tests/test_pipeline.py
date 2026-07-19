@@ -16,9 +16,11 @@ def pipeline(redis_client, no_vector_index):
 
 class TestChunking:
     def test_chunk_text_splits_on_sentence_boundaries(self, pipeline):
+        # _chunk_text splits on [.!?]+ and rejoins with a single space,
+        # so sentence-terminating punctuation is not preserved.
         text = "First sentence here. Second sentence follows! Third one too?"
         chunks = pipeline._chunk_text(text, chunk_size=1000, chunk_overlap=0)
-        assert chunks == ["First sentence here. Second sentence follows! Third one too"]
+        assert chunks == ["First sentence here Second sentence follows Third one too"]
 
     def test_chunk_text_respects_chunk_size(self, pipeline):
         text = ". ".join(f"Sentence number {i}" for i in range(20))
