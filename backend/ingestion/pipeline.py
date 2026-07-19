@@ -431,6 +431,8 @@ class DocumentIngestionPipeline:
         return chunks
 
     def _get_overlap(self, text: str, size: int) -> str:
+        if size <= 0:
+            return ""
         if len(text) <= size:
             return text
         start = max(0, len(text) - size)
