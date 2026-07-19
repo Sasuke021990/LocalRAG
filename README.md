@@ -88,6 +88,25 @@ docker-compose up --build -d
 
 - **100% Local**: No cloud dependencies, no telemetry, no external API calls (e.g., OpenAI). Your documents never leave your machine.
 - **Auto-Cleanup**: Your original raw documents are deleted from the server the second they finish chunking and vectorizing.
+- **Optional API-key auth**: set `API_KEY` in `.env` to require an `x-api-key` header on every backend route except `GET /` and `GET /health`. Unset (default) runs with no auth, suitable for a local-only deployment.
+
+## 🧪 Development
+
+Run the backend test suite (requires a reachable Redis; a `redis-stack` instance gives full coverage, including vector-index tests — a plain Redis skips those):
+```bash
+cd backend
+pip install -r requirements-dev.txt
+PYTHONPATH=. pytest tests/ -v
+```
+
+Run the frontend test suite:
+```bash
+cd frontend
+npm ci
+npm test
+```
+
+Both suites run in CI on every push/PR (`.github/workflows/ci.yml`).
 
 ## 📝 Detailed Documentation
 
