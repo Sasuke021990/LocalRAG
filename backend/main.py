@@ -170,7 +170,7 @@ async def create_category(request: CategoryCreate):
     """
     Creates a new category folder under ``/app/data/<name>/``.
     The folder is also immediately visible on the Docker-mapped host path
-    ``D:\\DockerData\\MyKnowledge\\<name>\\``.
+    (``KNOWLEDGE_DATA_PATH`` from ``.env``) at ``<KNOWLEDGE_DATA_PATH>/<name>/``.
     """
     try:
         # Sanitise name — prevent path traversal

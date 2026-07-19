@@ -20,7 +20,7 @@ Version 2.0 introduces a brand new **RAGFlow-inspired dark aesthetic UI**, a **C
 - **Category System**: Organize documents into custom categories (e.g., `Finance`, `Legal`, `Research`).
 - **Robust Persistence**: 
   - **Redis Stack** acts as the high-speed volatile layer for vector search.
-  - **JSON Backups** act as the durable storage layer. Every document processed is saved as a structured JSON file to your mapped host volume (`D:\DockerData\MyKnowledge\`).
+  - **JSON Backups** act as the durable storage layer. Every document processed is saved as a structured JSON file to your mapped host volume (`KNOWLEDGE_DATA_PATH` in `.env`, `./data` by default).
 - **Auto Re-indexing**: If the Docker containers are destroyed or volumes are pruned, the system automatically reads the JSON backups on the next startup and fully restores the Redis index. Zero data loss.
 - **Secure Processing**: The original uploaded files are automatically deleted after successful parsing and ingestion.
 
@@ -37,14 +37,13 @@ Backend (FastAPI :8000)
         v
 Redis Stack (:6379)  <-- Sub-millisecond Vector & Cache Store
         v
-Mounted Host Volume (D:\DockerData\MyKnowledge\) <-- Durable JSON Backups
+Mounted Host Volume (KNOWLEDGE_DATA_PATH, ./data by default) <-- Durable JSON Backups
 ```
 
 ## 🛠️ Installation & Setup
 
 ### Prerequisites
 - Docker and Docker Compose
-- Windows Host (or Linux/Mac with path adjustments in `docker-compose.yml`)
 - At least 8GB RAM (16GB+ recommended for loading multiple ML models)
 
 ### Quick Start
@@ -55,9 +54,11 @@ git clone <repository-url>
 cd LocalRAG
 ```
 
-2. **Ensure your host volume directory exists** (Windows default)
-```powershell
-New-Item -ItemType Directory -Force -Path "D:\DockerData\MyKnowledge"
+2. **Configure your environment**
+```bash
+cp .env.example .env
+# Edit .env: set KNOWLEDGE_DATA_PATH to where you want document backups
+# stored (defaults to ./data), and optionally API_KEY/CORS_ALLOWED_ORIGINS.
 ```
 
 3. **Start the application**
