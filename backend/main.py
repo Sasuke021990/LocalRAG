@@ -44,7 +44,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-DATA_DIR = Path("/app/data")
+DATA_DIR = Path(config.DATA_DIR)
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx", ".csv", ".md", ".html", ".htm", ".json", ".xml"}
 
 # ─── FastAPI app ───────────────────────────────────────────────────────────────

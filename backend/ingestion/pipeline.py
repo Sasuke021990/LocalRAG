@@ -27,6 +27,7 @@ from docx import Document as DocxDocument
 from sentence_transformers import SentenceTransformer
 
 from retrieval import vector_index
+from utils.config import config
 from utils.device import get_best_device
 
 ALLOWED_EXTENSIONS = {
@@ -201,7 +202,7 @@ class DocumentIngestionPipeline:
 
             # Remove JSON backup
             stem = Path(file_name).stem
-            json_path = Path(f"/app/data/{user_id}/{category}/{stem}.json")
+            json_path = Path(config.DATA_DIR) / user_id / category / f"{stem}.json"
             freed_bytes = 0
             if json_path.exists():
                 freed_bytes = json_path.stat().st_size
@@ -350,7 +351,7 @@ class DocumentIngestionPipeline:
         """
         file_name = Path(file_path).name
         stem = Path(file_path).stem
-        backup_dir = Path(f"/app/data/{user_id}/{category}")
+        backup_dir = Path(config.DATA_DIR) / user_id / category
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup_path = backup_dir / f"{stem}.json"
 

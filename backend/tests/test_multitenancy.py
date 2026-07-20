@@ -17,6 +17,19 @@ from ingestion.pipeline import DocumentIngestionPipeline
 from tests.conftest import REDIS_HOST, REDIS_PORT
 
 
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(monkeypatch, tmp_path):
+    """Redirect the pipeline's JSON-backup dir to a writable temp path.
+
+    process_document writes backups under config.DATA_DIR (default
+    /app/data, which isn't writable off-Docker / in CI). Point it at
+    tmp_path so these full-pipeline tests run anywhere.
+    """
+    from utils.config import config
+
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp_path / "data"))
+
+
 @pytest.fixture
 def pipeline(redis_client, no_vector_index):
     return DocumentIngestionPipeline(redis_host=REDIS_HOST, redis_port=REDIS_PORT, redis_db=0)
