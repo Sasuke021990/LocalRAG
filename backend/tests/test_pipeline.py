@@ -87,7 +87,7 @@ class TestStorageRoundTrip:
         docs = pipeline.list_documents(self.USER_A)
         assert len(docs) == 1
         assert docs[0]["file_name"] == "report.pdf"
-        assert docs[0]["category"] == "Finance"
+        assert docs[0]["pool"] == "Finance"
         assert docs[0]["chunk_count"] == 2
 
         freed = pipeline.delete_document("report.pdf", "Finance", self.USER_A)
@@ -117,18 +117,19 @@ class TestStorageRoundTrip:
         assert [d["file_name"] for d in pipeline.list_documents(self.USER_B)] == ["theirs.pdf"]
 
     def test_reindex_from_disk_restores_document(self, pipeline, tmp_path):
-        category_dir = tmp_path / self.USER_A / "General"
-        category_dir.mkdir(parents=True)
+        pool_dir = tmp_path / self.USER_A / "General"
+        pool_dir.mkdir(parents=True)
         backup = {
             "file_name": "notes.txt",
-            "category": "General",
+            "pool": "General",
+            "pool_assigned": True,
             "user_id": self.USER_A,
             "chunks": ["a chunk of text"],
             "embeddings": [[0.1] * 384],
             "chunk_count": 1,
             "processed_at": "2026-01-01T00:00:00",
         }
-        (category_dir / "notes.json").write_text(json.dumps(backup), encoding="utf-8")
+        (pool_dir / "notes.json").write_text(json.dumps(backup), encoding="utf-8")
 
         count = pipeline.reindex_from_disk(str(tmp_path))
 

@@ -10,7 +10,7 @@
 2. [Architecture](#2-architecture)
 3. [Data Flow](#3-data-flow)
 4. [Storage Strategy](#4-storage-strategy)
-5. [Category System](#5-category-system)
+5. [Knowledge Pools](#5-knowledge-pools)
 6. [API Reference](#6-api-reference)
 7. [Frontend Guide](#7-frontend-guide)
 8. [Docker Setup](#8-docker-setup)
@@ -179,20 +179,25 @@ JSON structure:
 
 ---
 
-## 5. Category System
+## 5. Knowledge Pools
 
-Categories are real directories on your mapped volume. Creating a category Finance immediately creates $KNOWLEDGE_DATA_PATH/Finance/.
+A **knowledge pool** is a named container for a user's embedded documents.
+Each pool is a real directory under that user's namespace
+(`<DATA_DIR>/<user_id>/<pool>/`) and every document key is scoped to it
+(`document:<user_id>:<pool>:<file>`). Search results and chat citations
+carry the pool name alongside the document.
 
-### Via UI
-Knowledge Base tab -> Categories panel -> enter name -> Create Category
-
-### Via API
-    curl -X POST http://localhost:8000/categories \
+### Create a pool
+    curl -X POST http://localhost:8000/pools \
       -H "Content-Type: application/json" \
       -d '{"name": "Finance"}'
 
-### Default Category
-If no category is specified, documents go to General.
+### Default pool + assignment prompt
+If you upload without choosing a pool, the document lands in the default
+`General` pool but is flagged `pool_assigned: false`, so the UI can prompt
+you to keep it in `General` or move it to a pool of your choice. Confirming
+or moving (see `PATCH /documents/{file}/pool`) sets `pool_assigned: true`.
+`General` always exists and can't be deleted.
 
 ---
 
@@ -246,22 +251,27 @@ Response: {"message": "LocalRAG API v2.0 is running", "version": "2.0.0"}
 Health check.
 Response: {"status": "healthy", "version": "2.0.0"}
 
-### GET /categories
-List all categories.
-Response: {"categories": ["Finance", "General", "Research"], "total": 3}
+### GET /pools
+List this user's knowledge pools with document counts.
+Response: {"pools": [{"name": "Finance", "document_count": 3}, {"name": "General", "document_count": 0}], "total": 2}
 
-### POST /categories
-Create a new category.
+### POST /pools
+Create a new (empty) pool.
 Body: {"name": "Legal"}
-Response: {"status": "created", "category": "Legal"}
+Response: {"status": "created", "pool": "Legal"}
+
+### DELETE /pools/{name}
+Delete an **empty** pool (409 if it still holds documents; `General` can't be deleted).
+Response: {"status": "deleted", "pool": "Legal"}
 
 ### GET /documents
 List all indexed documents with metadata.
 Response: {
   "documents": [{
-    "key": "document:Research:paper.pdf",
+    "key": "document:<user_id>:Research:paper.pdf",
     "file_name": "paper.pdf",
-    "category": "Research",
+    "pool": "Research",
+    "pool_assigned": true,
     "chunk_count": 42,
     "processed_at": "2026-05-20T18:30:00",
     "embedding_dimension": 384
@@ -269,23 +279,33 @@ Response: {
   "total": 1
 }
 
-### DELETE /documents/{file_name}?category=Research
+`pool_assigned: false` means the document was uploaded without a chosen pool
+(it's in `General`) and the UI should prompt the user to keep or move it.
+
+### DELETE /documents/{file_name}?pool=Research
 Delete from Redis and disk.
-Response: {"status": "deleted", "file_name": "paper.pdf", "category": "Research"}
+Response: {"status": "deleted", "file_name": "paper.pdf", "pool": "Research"}
+
+### PATCH /documents/{file_name}/pool
+Move a document to another pool — or *assign* an unassigned one (pass
+`new_pool == current_pool` to keep it and just clear the flag).
+Body: {"current_pool": "General", "new_pool": "Finance"}
+Response: {"status": "moved", "document": {"file_name": "paper.pdf", "pool": "Finance", "pool_assigned": true, ...}}
 
 ### POST /upload
-Upload and ingest a document.
+Upload and ingest a document into a pool.
 Form fields:
   file          - Document file (required)
-  category      - Target category (default: General)
+  pool          - Target pool (blank = default 'General', flagged for assignment)
   chunk_size    - Characters per chunk (default: 512)
   chunk_overlap - Overlap between chunks (default: 50)
 
 Response: {
   "status": "processing_started",
   "filename": "report.pdf",
-  "category": "Finance",
-  "message": "'report.pdf' queued for ingestion in category 'Finance'"
+  "pool": "Finance",
+  "pool_assigned": true,
+  "message": "'report.pdf' queued for ingestion in pool 'Finance'"
 }
 
 NOTE: Processing is asynchronous. Poll GET /documents to confirm completion.
@@ -297,7 +317,7 @@ Response: {
   "answer": "Based on the retrieved documents...",
   "sources": [{
     "file_name": "policy.pdf",
-    "category": "General",
+    "pool": "General",
     "chunk_index": 3,
     "score": 0.9823,
     "content": "The refund policy states..."

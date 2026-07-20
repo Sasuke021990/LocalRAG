@@ -44,8 +44,8 @@ class TestFullPipelineIsolationBetweenTwoUsers:
         file_b = tmp_path / "bob_notes.txt"
         file_b.write_text("Bob's private research notes about hiring plans.", encoding="utf-8")
 
-        result_a = pipeline.process_document(str(file_a), test_user, category="General")
-        result_b = pipeline.process_document(str(file_b), second_test_user, category="General")
+        result_a = pipeline.process_document(str(file_a), test_user, pool="General")
+        result_b = pipeline.process_document(str(file_b), second_test_user, pool="General")
 
         assert result_a["status"] == "success"
         assert result_b["status"] == "success"
@@ -67,6 +67,6 @@ class TestFullPipelineIsolationBetweenTwoUsers:
         file_a = tmp_path / "temp_upload.txt"
         file_a.write_text("some content to embed", encoding="utf-8")
 
-        pipeline.process_document(str(file_a), test_user, category="General")
+        pipeline.process_document(str(file_a), test_user, pool="General")
 
         assert not file_a.exists()

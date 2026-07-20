@@ -59,7 +59,7 @@ def test_index_chunk_and_knn_search_orders_by_similarity(redis_client):
     assert [r["content"] for r in results][:2] == ["target chunk", "near chunk"]
     assert results[0]["score"] > results[1]["score"] > results[2]["score"]
     assert results[0]["file_name"] == "doc.txt"
-    assert results[0]["category"] == "General"
+    assert results[0]["pool"] == "General"
 
 
 def test_delete_chunks_removes_hashes(redis_client):

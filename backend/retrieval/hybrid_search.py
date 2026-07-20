@@ -127,7 +127,7 @@ class HybridSearchEngine:
         (Re)build one user's BM25 index from a list of documents.
 
         Each document dict must have a ``content`` field. Optional keys
-        ``file_name``, ``category``, and ``chunk_index`` are preserved as
+        ``file_name``, ``pool``, and ``chunk_index`` are preserved as
         metadata so that search results carry proper attribution.
         """
         if not BM25_AVAILABLE:
@@ -145,7 +145,7 @@ class HybridSearchEngine:
                 state.doc_ids.append(str(i))
                 state.doc_meta.append({
                     'file_name':   doc.get('file_name', 'Unknown'),
-                    'category':    doc.get('category',  'General'),
+                    'pool':        doc.get('pool',  'General'),
                     'chunk_index': doc.get('chunk_index', i),
                 })
 
@@ -217,7 +217,7 @@ class HybridSearchEngine:
                     score=hit['score'],
                     metadata={
                         'file_name':   hit['file_name'],
-                        'category':    hit['category'],
+                        'pool':        hit['pool'],
                         'chunk_index': hit['chunk_index'],
                     },
                     source='vector',
@@ -303,12 +303,12 @@ class HybridSearchEngine:
                     except Exception:
                         continue
                     file_name = doc.get('file_name', 'Unknown')
-                    category  = doc.get('category',  'General')
+                    pool      = doc.get('pool') or doc.get('category') or 'General'
                     for ci, chunk_text in enumerate(doc.get('chunks', [])):
                         docs_for_bm25.append({
                             'content':     chunk_text,
                             'file_name':   file_name,
-                            'category':    category,
+                            'pool':        pool,
                             'chunk_index': ci,
                         })
                 if docs_for_bm25:
@@ -323,6 +323,15 @@ class HybridSearchEngine:
 
         logger.info(f"Hybrid search completed with {len(fused_results)} results")
         return fused_results
+
+    def invalidate_bm25(self, user_id: str) -> None:
+        """
+        Drop a user's cached in-memory BM25 index so it's rebuilt from Redis
+        on their next query. Must be called whenever that user's document set
+        changes (ingest, delete, move between pools) — otherwise the cached
+        index (built once per process) would serve stale content/metadata.
+        """
+        self._bm25_by_user.pop(user_id, None)
 
     def get_search_stats(self) -> Dict[str, Any]:
         """

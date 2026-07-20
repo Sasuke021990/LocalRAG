@@ -2,10 +2,10 @@
 RediSearch vector index over per-chunk embeddings.
 
 ``ingestion.pipeline`` stores each document as a single JSON-blob STRING
-keyed ``document:<category>:<file_name>`` (chunks + embeddings as parallel
+keyed ``document:<user_id>:<pool>:<file_name>`` (chunks + embeddings as parallel
 lists). RediSearch can only index HASH or JSON documents, not opaque
 STRINGs, so this module maintains a second, *derived* representation: one
-HASH per chunk (``chunk:<category>:<file_name>:<chunk_index>``) indexed by
+HASH per chunk (``chunk:<user_id>:<pool>:<file_name>:<chunk_index>``) indexed by
 an HNSW vector field, letting queries do a real cosine-similarity KNN
 search instead of scanning/scoring every chunk in Python.
 
@@ -42,9 +42,9 @@ def escape_tag_value(value: str) -> str:
     return "".join(f"\\{ch}" if ch in _TAG_SPECIAL_CHARS else ch for ch in value)
 
 
-def chunk_key(user_id: str, category: str, file_name: str, chunk_index: int) -> str:
+def chunk_key(user_id: str, pool: str, file_name: str, chunk_index: int) -> str:
     """Deterministic key for one chunk — no KEYS/SCAN needed to delete it later."""
-    return f"{CHUNK_KEY_PREFIX}{user_id}:{category}:{file_name}:{chunk_index}"
+    return f"{CHUNK_KEY_PREFIX}{user_id}:{pool}:{file_name}:{chunk_index}"
 
 
 def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
@@ -54,10 +54,19 @@ def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
     Idempotent and safe to call from multiple constructors / every process
     start — swallows "index already exists" so callers never need to
     coordinate who creates it first.
+
+    If an index exists but predates the ``pool`` field (it still has the old
+    ``category`` tag), it's dropped and recreated with the current schema —
+    the chunk HASHes are rebuilt from disk on startup anyway
+    (``reindex_from_disk``), so dropping the index without deleting documents
+    is safe and cheap.
     """
     try:
-        redis_client.ft(INDEX_NAME).info()
-        return
+        info = redis_client.ft(INDEX_NAME).info()
+        if "pool" in str(info.get("attributes", info)):
+            return
+        # Stale pre-pool schema — drop (keep the HASHes) and recreate below.
+        redis_client.ft(INDEX_NAME).dropindex(delete_documents=False)
     except Exception:
         pass
 
@@ -65,7 +74,7 @@ def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
         TextField("content"),
         TagField("user_id"),
         TagField("file_name"),
-        TagField("category"),
+        TagField("pool"),
         NumericField("chunk_index"),
         VectorField(
             "embedding",
@@ -91,14 +100,14 @@ def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
 def index_chunk(
     redis_client: Redis,
     user_id: str,
-    category: str,
+    pool: str,
     file_name: str,
     chunk_index: int,
     content: str,
     embedding: List[float],
 ) -> None:
     """Write/overwrite one chunk HASH. Idempotent — safe to call repeatedly (e.g. on reindex)."""
-    key = chunk_key(user_id, category, file_name, chunk_index)
+    key = chunk_key(user_id, pool, file_name, chunk_index)
     vector_bytes = np.array(embedding, dtype=np.float32).tobytes()
     redis_client.hset(
         key,
@@ -106,18 +115,18 @@ def index_chunk(
             "content": content,
             "user_id": user_id,
             "file_name": file_name,
-            "category": category,
+            "pool": pool,
             "chunk_index": chunk_index,
             "embedding": vector_bytes,
         },
     )
 
 
-def delete_chunks(redis_client: Redis, user_id: str, category: str, file_name: str, chunk_count: int) -> None:
+def delete_chunks(redis_client: Redis, user_id: str, pool: str, file_name: str, chunk_count: int) -> None:
     """Delete all chunk HASHes for a document by reconstructing their deterministic keys."""
     if chunk_count <= 0:
         return
-    keys = [chunk_key(user_id, category, file_name, i) for i in range(chunk_count)]
+    keys = [chunk_key(user_id, pool, file_name, i) for i in range(chunk_count)]
     redis_client.delete(*keys)
 
 
@@ -137,7 +146,7 @@ def knn_search(redis_client: Redis, user_id: str, query_embedding: List[float], 
     query = (
         Query(f"(@user_id:{{{escape_tag_value(user_id)}}})=>[KNN {top_k} @embedding $vec AS score]")
         .sort_by("score")
-        .return_fields("content", "file_name", "category", "chunk_index", "score")
+        .return_fields("content", "file_name", "pool", "chunk_index", "score")
         .dialect(2)
     )
     try:
@@ -153,7 +162,7 @@ def knn_search(redis_client: Redis, user_id: str, query_embedding: List[float], 
             {
                 "content": doc.content,
                 "file_name": doc.file_name,
-                "category": doc.category,
+                "pool": doc.pool,
                 "chunk_index": int(doc.chunk_index),
                 # COSINE distance is in [0, 2]; convert to a similarity score
                 # (higher = more relevant) so it's comparable to BM25 scores.

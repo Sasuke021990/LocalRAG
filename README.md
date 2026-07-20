@@ -17,7 +17,7 @@ Version 2.0 introduces a brand new **RAGFlow-inspired dark aesthetic UI**, a **C
 - **Semantic Caching**: Redis-backed caching instantly returns answers for repeated or semantically identical queries, skipping the LLM generation step.
 
 ### 📂 Knowledge Management & Dual-Storage
-- **Category System**: Organize documents into custom categories (e.g., `Finance`, `Legal`, `Research`).
+- **Knowledge Pools**: Organize documents into custom pools (e.g., `Finance`, `Legal`, `Research`); move documents between pools any time, and every search result / chat citation shows which pool it came from.
 - **Robust Persistence**: 
   - **Redis Stack** acts as the high-speed volatile layer for vector search.
   - **JSON Backups** act as the durable storage layer. Every document processed is saved as a structured JSON file to your mapped host volume (`KNOWLEDGE_DATA_PATH` in `.env`, `./data` by default).
@@ -74,8 +74,8 @@ docker-compose up --build -d
 
 ## 🚀 Usage Guide
 
-1. **Create Categories**: Go to the **Knowledge Base** tab and create folders for your data.
-2. **Upload Documents**: Select a category, tweak chunk sizes if necessary, and drop your files. Ingestion happens asynchronously in the background.
+1. **Create Pools**: Go to the **Knowledge Base** tab and create knowledge pools for your data.
+2. **Upload Documents**: Select a pool (or leave it blank and you'll be prompted to pick one — or keep the default `General` — after embedding), tweak chunk sizes if necessary, and drop your files. Ingestion happens asynchronously in the background.
 3. **Query**: Go to the **Chat** tab, adjust your Retrieve (Top-K) and Re-rank sliders, and ask questions.
 4. **Manage Data**: Delete documents directly from the UI library to completely wipe them from both Redis and the disk backup.
 
