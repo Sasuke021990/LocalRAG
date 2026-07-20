@@ -66,10 +66,6 @@ class SemanticCache:
         self.cache_prefix = cache_prefix
         self.default_ttl = default_ttl
         self.similarity_threshold = similarity_threshold
-        # Redis SET of active cache keys, maintained alongside the entries
-        # themselves so a semantic-similarity lookup can iterate a small
-        # candidate set instead of scanning with KEYS on every query.
-        self.index_key = f"{cache_prefix}__index__"
 
         # Initialize Redis connection
         self.redis_client = None
@@ -98,19 +94,20 @@ class SemanticCache:
             logger.error(f"Failed to load embedding model '{embedding_model}': {str(e)}")
             self.model = None
     
-    def _generate_cache_key(self, query: str) -> str:
-        """
-        Generate a cache key for a given query.
-        
-        Args:
-            query (str): The search query
-            
-        Returns:
-            str: Cache key
-        """
-        # Create a hash of the query to generate a consistent key
+    def _generate_cache_key(self, user_id: str, query: str) -> str:
+        """Generate a per-user cache key for a given query."""
         query_hash = hashlib.md5(query.encode()).hexdigest()
-        return f"{self.cache_prefix}{query_hash}"
+        return f"{self.cache_prefix}{user_id}:{query_hash}"
+
+    def _index_key(self, user_id: str) -> str:
+        """
+        Redis SET of one user's active cache keys, maintained alongside the
+        entries themselves so a semantic-similarity lookup can iterate a
+        small per-user candidate set instead of scanning with KEYS on every
+        query — and so one user's candidates never include another user's
+        cached queries.
+        """
+        return f"{self.cache_prefix}{user_id}:__index__"
     
     def _embed(self, query: str) -> Optional[List[float]]:
         """Embed a query with the cache's model. Returns None if unavailable."""
@@ -136,15 +133,15 @@ class SemanticCache:
         threshold = self.similarity_threshold if threshold is None else threshold
         return self._cosine_similarity(embedding1, embedding2) >= threshold
     
-    def _load_entry(self, cache_key: str) -> Optional[Dict[str, Any]]:
+    def _load_entry(self, cache_key: str, index_key: str) -> Optional[Dict[str, Any]]:
         """
         Load and validate a raw cache entry by key. Removes it (from the
-        entry key and the key-index SET) if missing, expired, or corrupted.
-        Returns the parsed dict, or None.
+        entry key and its owner's key-index SET) if missing, expired, or
+        corrupted. Returns the parsed dict, or None.
         """
         cached_data = self.redis_client.get(cache_key)
         if not cached_data:
-            self.redis_client.srem(self.index_key, cache_key)
+            self.redis_client.srem(index_key, cache_key)
             return None
 
         try:
@@ -154,24 +151,26 @@ class SemanticCache:
 
             if datetime.now() - timestamp > timedelta(seconds=ttl):
                 self.redis_client.delete(cache_key)
-                self.redis_client.srem(self.index_key, cache_key)
+                self.redis_client.srem(index_key, cache_key)
                 return None
 
             return parsed_data
         except (json.JSONDecodeError, KeyError) as e:
             logger.error(f"Error parsing cached entry '{cache_key}': {str(e)}")
             self.redis_client.delete(cache_key)
-            self.redis_client.srem(self.index_key, cache_key)
+            self.redis_client.srem(index_key, cache_key)
             return None
 
-    def get_cached_result(self, query: str) -> Optional[CachedResult]:
+    def get_cached_result(self, user_id: str, query: str) -> Optional[CachedResult]:
         """
-        Retrieve a cached result for the given query: first an exact
+        Retrieve a cached result for the given user+query: first an exact
         (MD5-hash) match, then — if that misses and an embedding model is
-        available — the most similar past query above
-        ``self.similarity_threshold``.
+        available — the most similar past query *from the same user* above
+        ``self.similarity_threshold``. Never considers another user's
+        cached queries, even as a semantic-similarity candidate.
 
         Args:
+            user_id (str): The owning user's ID
             query (str): The search query
 
         Returns:
@@ -182,11 +181,13 @@ class SemanticCache:
             return None
 
         try:
+            index_key = self._index_key(user_id)
+
             # 1. Exact-match fast path
-            cache_key = self._generate_cache_key(query)
-            parsed_data = self._load_entry(cache_key)
+            cache_key = self._generate_cache_key(user_id, query)
+            parsed_data = self._load_entry(cache_key, index_key)
             if parsed_data:
-                logger.info(f"Cache hit (exact) for query: {query}")
+                logger.info(f"Cache hit (exact) for user {user_id}, query: {query}")
                 return CachedResult(
                     query=query,
                     results=parsed_data['results'],
@@ -194,16 +195,16 @@ class SemanticCache:
                     ttl=parsed_data.get('ttl', self.default_ttl),
                 )
 
-            # 2. Semantic-similarity fallback
+            # 2. Semantic-similarity fallback (same user only)
             query_embedding = self._embed(query)
             if not query_embedding:
                 return None
 
             best_match, best_score = None, 0.0
-            for candidate_key in self.redis_client.smembers(self.index_key):
+            for candidate_key in self.redis_client.smembers(index_key):
                 if candidate_key == cache_key:
                     continue
-                candidate = self._load_entry(candidate_key)
+                candidate = self._load_entry(candidate_key, index_key)
                 if not candidate or not candidate.get('embedding'):
                     continue
                 score = self._cosine_similarity(query_embedding, candidate['embedding'])
@@ -212,7 +213,7 @@ class SemanticCache:
 
             if best_match:
                 logger.info(
-                    f"Cache hit (semantic, score={best_score:.4f}) for query: "
+                    f"Cache hit (semantic, score={best_score:.4f}) for user {user_id}, query: "
                     f"'{query}' ~ '{best_match.get('query')}'"
                 )
                 return CachedResult(
@@ -222,19 +223,20 @@ class SemanticCache:
                     ttl=best_match.get('ttl', self.default_ttl),
                 )
 
-            logger.debug(f"No cached result found for query: {query}")
+            logger.debug(f"No cached result found for user {user_id}, query: {query}")
             return None
 
         except Exception as e:
             logger.error(f"Error retrieving from cache: {str(e)}")
             return None
 
-    def set_cached_result(self, query: str, results: List[Dict[str, Any]],
+    def set_cached_result(self, user_id: str, query: str, results: List[Dict[str, Any]],
                          ttl: int = None) -> bool:
         """
-        Store a result in the semantic cache.
+        Store a result in the semantic cache, scoped to ``user_id``.
 
         Args:
+            user_id (str): The owning user's ID
             query (str): The search query
             results (List): List of search results to cache
             ttl (int): Time-to-live for this entry (seconds)
@@ -261,63 +263,63 @@ class SemanticCache:
             }
 
             # Generate cache key
-            cache_key = self._generate_cache_key(query)
+            cache_key = self._generate_cache_key(user_id, query)
 
             # Store in Redis as JSON string with TTL
             json_data = json.dumps(cached_entry)
             self.redis_client.setex(cache_key, ttl, json_data)
-            self.redis_client.sadd(self.index_key, cache_key)
+            self.redis_client.sadd(self._index_key(user_id), cache_key)
 
-            logger.info(f"Stored cached result for query: {query} (TTL: {ttl}s)")
+            logger.info(f"Stored cached result for user {user_id}, query: {query} (TTL: {ttl}s)")
             return True
 
         except Exception as e:
             logger.error(f"Error storing in cache: {str(e)}")
             return False
     
-    def clear_cache(self) -> bool:
+    def clear_cache(self, user_id: str) -> bool:
         """
-        Clear all entries from the semantic cache.
-        
+        Clear all cache entries belonging to one user.
+
         Returns:
             bool: True if successful, False otherwise
         """
         if not self.redis_client or not REDIS_AVAILABLE:
             logger.warning("Redis not available - cannot clear cache")
             return False
-        
+
         try:
-            # Get all keys matching our prefix and delete them
-            pattern = f"{self.cache_prefix}*"
+            pattern = f"{self.cache_prefix}{user_id}:*"
             keys = self.redis_client.keys(pattern)
-            
+
             if keys:
                 self.redis_client.delete(*keys)
-                logger.info(f"Cleared {len(keys)} entries from semantic cache")
+                logger.info(f"Cleared {len(keys)} entries from semantic cache for user {user_id}")
             else:
-                logger.debug("No entries found to clear from semantic cache")
-                
+                logger.debug(f"No entries found to clear from semantic cache for user {user_id}")
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error clearing cache: {str(e)}")
             return False
-    
-    def get_cache_stats(self) -> Dict[str, Any]:
+
+    def get_cache_stats(self, user_id: str) -> Dict[str, Any]:
         """
-        Get statistics about the semantic cache.
-        
+        Get statistics about one user's semantic cache.
+
         Returns:
             Dictionary with cache statistics
         """
         if not self.redis_client or not REDIS_AVAILABLE:
             return {"error": "Redis not available"}
-        
+
         try:
-            # Get approximate number of keys matching our prefix (excluding
-            # the key-index SET itself, which isn't a cache entry)
-            pattern = f"{self.cache_prefix}*"
-            keys = [k for k in self.redis_client.keys(pattern) if k != self.index_key]
+            # Get approximate number of keys matching this user's prefix
+            # (excluding the key-index SET itself, which isn't a cache entry)
+            pattern = f"{self.cache_prefix}{user_id}:*"
+            index_key = self._index_key(user_id)
+            keys = [k for k in self.redis_client.keys(pattern) if k != index_key]
 
             return {
                 "redis_connected": True,

@@ -8,6 +8,9 @@ import pytest
 from retrieval.semantic_cache import SemanticCache
 from tests.conftest import REDIS_HOST, REDIS_PORT
 
+USER_A = "user-aaa"
+USER_B = "user-bbb"
+
 
 @pytest.fixture
 def cache(redis_client):
@@ -40,26 +43,43 @@ class TestCosineSimilarity:
 
 class TestExactMatchCache:
     def test_miss_then_hit(self, cache):
-        assert cache.get_cached_result("what is redis?") is None
+        assert cache.get_cached_result(USER_A, "what is redis?") is None
 
-        cache.set_cached_result("what is redis?", [{"answer": "an in-memory store", "sources": []}])
+        cache.set_cached_result(USER_A, "what is redis?", [{"answer": "an in-memory store", "sources": []}])
 
-        result = cache.get_cached_result("what is redis?")
+        result = cache.get_cached_result(USER_A, "what is redis?")
         assert result is not None
         assert result.results[0]["answer"] == "an in-memory store"
 
     def test_expired_entry_is_removed(self, cache):
-        cache.set_cached_result("temp query", [{"answer": "x", "sources": []}], ttl=1)
-        assert cache.get_cached_result("temp query") is not None
+        cache.set_cached_result(USER_A, "temp query", [{"answer": "x", "sources": []}], ttl=1)
+        assert cache.get_cached_result(USER_A, "temp query") is not None
         time.sleep(1.1)
-        assert cache.get_cached_result("temp query") is None
+        assert cache.get_cached_result(USER_A, "temp query") is None
 
     def test_clear_cache(self, cache):
-        cache.set_cached_result("q1", [{"answer": "a1", "sources": []}])
-        cache.set_cached_result("q2", [{"answer": "a2", "sources": []}])
-        assert cache.clear_cache() is True
-        assert cache.get_cached_result("q1") is None
-        assert cache.get_cached_result("q2") is None
+        cache.set_cached_result(USER_A, "q1", [{"answer": "a1", "sources": []}])
+        cache.set_cached_result(USER_A, "q2", [{"answer": "a2", "sources": []}])
+        assert cache.clear_cache(USER_A) is True
+        assert cache.get_cached_result(USER_A, "q1") is None
+        assert cache.get_cached_result(USER_A, "q2") is None
+
+    def test_same_query_different_users_cached_separately(self, cache):
+        cache.set_cached_result(USER_A, "shared question", [{"answer": "answer for A", "sources": []}])
+        assert cache.get_cached_result(USER_B, "shared question") is None
+
+        cache.set_cached_result(USER_B, "shared question", [{"answer": "answer for B", "sources": []}])
+        assert cache.get_cached_result(USER_A, "shared question").results[0]["answer"] == "answer for A"
+        assert cache.get_cached_result(USER_B, "shared question").results[0]["answer"] == "answer for B"
+
+    def test_clear_cache_only_affects_owning_user(self, cache):
+        cache.set_cached_result(USER_A, "q1", [{"answer": "a1", "sources": []}])
+        cache.set_cached_result(USER_B, "q1", [{"answer": "b1", "sources": []}])
+
+        cache.clear_cache(USER_A)
+
+        assert cache.get_cached_result(USER_A, "q1") is None
+        assert cache.get_cached_result(USER_B, "q1") is not None
 
 
 class TestSemanticSimilarityCache:
@@ -71,22 +91,33 @@ class TestSemanticSimilarityCache:
 
         monkeypatch.setattr(cache, "_embed", fake_embed)
 
-        cache.set_cached_result("how do I reset my password?", [{"answer": "go to settings", "sources": []}])
+        cache.set_cached_result(USER_A, "how do I reset my password?", [{"answer": "go to settings", "sources": []}])
 
-        result = cache.get_cached_result("how can I reset my password")
+        result = cache.get_cached_result(USER_A, "how can I reset my password")
         assert result is not None
         assert result.results[0]["answer"] == "go to settings"
 
     def test_unrelated_query_does_not_hit_cache(self, cache):
-        cache.set_cached_result("what is the capital of France?", [{"answer": "Paris", "sources": []}])
+        cache.set_cached_result(USER_A, "what is the capital of France?", [{"answer": "Paris", "sources": []}])
 
         # Hash-derived embeddings for unrelated strings are effectively
         # random unit vectors in 384 dims — expected cosine similarity ~0,
         # far below the 0.92 threshold.
-        result = cache.get_cached_result("how does photosynthesis work in plants?")
+        result = cache.get_cached_result(USER_A, "how does photosynthesis work in plants?")
+        assert result is None
+
+    def test_semantic_match_does_not_leak_across_users(self, cache, monkeypatch):
+        shared_vector = [1.0] + [0.0] * (384 - 1)
+        monkeypatch.setattr(cache, "_embed", lambda query: shared_vector)
+
+        cache.set_cached_result(USER_A, "how do I reset my password?", [{"answer": "user A's answer", "sources": []}])
+
+        # Same embedding, but a different user's paraphrase must not hit
+        # user A's cached entry -- the candidate index is per-user.
+        result = cache.get_cached_result(USER_B, "how can I reset my password")
         assert result is None
 
     def test_get_cache_stats_excludes_index_key(self, cache):
-        cache.set_cached_result("q1", [{"answer": "a1", "sources": []}])
-        stats = cache.get_cache_stats()
+        cache.set_cached_result(USER_A, "q1", [{"answer": "a1", "sources": []}])
+        stats = cache.get_cache_stats(USER_A)
         assert stats["cached_entries"] == 1

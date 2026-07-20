@@ -4,7 +4,7 @@ Hybrid search implementation using BM25 (sparse) and RediSearch vector KNN (dens
 
 import logging
 from typing import List, Dict, Any, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 
 # For BM25 search
@@ -37,6 +37,17 @@ class SearchResult:
     score: float
     metadata: Dict[str, Any]
     source: str
+
+
+@dataclass
+class _Bm25State:
+    """One user's in-memory BM25 index. Kept per-user so BM25 scoring never mixes users' content."""
+    bm25: Any = None
+    corpus: list = field(default_factory=list)          # tokenised token lists
+    corpus_raw: list = field(default_factory=list)       # original text strings
+    doc_meta: list = field(default_factory=list)         # parallel metadata dicts
+    doc_ids: list = field(default_factory=list)
+
 
 class HybridSearchEngine:
     """
@@ -102,20 +113,18 @@ class HybridSearchEngine:
             logger.error(f"Failed to load embedding model '{embedding_model}': {str(e)}")
             self.model = None
 
-        # Initialize BM25
-        self.bm25 = None
-        self.bm25_corpus = []          # tokenised token lists
-        self.bm25_corpus_raw = []      # original text strings
-        self.bm25_doc_meta = []        # parallel metadata dicts
-        self.bm25_doc_ids = []
+        # Per-user in-memory BM25 indices — never a single global index,
+        # so one user's keyword scoring can't be influenced by (or leak)
+        # another user's content.
+        self._bm25_by_user: Dict[str, _Bm25State] = {}
         if BM25_AVAILABLE:
             logger.info("BM25 search engine initialized")
         else:
             logger.warning("BM25 search engine not available")
-    
-    def setup_bm25_index(self, documents: List[Dict[str, Any]]) -> None:
+
+    def setup_bm25_index(self, user_id: str, documents: List[Dict[str, Any]]) -> None:
         """
-        Setup BM25 index from a list of documents.
+        (Re)build one user's BM25 index from a list of documents.
 
         Each document dict must have a ``content`` field. Optional keys
         ``file_name``, ``category``, and ``chunk_index`` are preserved as
@@ -126,47 +135,46 @@ class HybridSearchEngine:
             return
 
         try:
-            self.bm25_corpus     = []
-            self.bm25_corpus_raw = []
-            self.bm25_doc_meta   = []
-            self.bm25_doc_ids    = []
+            state = _Bm25State()
 
             for i, doc in enumerate(documents):
                 content = doc.get('content', '') or ''
                 tokens  = content.lower().split()
-                self.bm25_corpus.append(tokens)
-                self.bm25_corpus_raw.append(content)
-                self.bm25_doc_ids.append(str(i))
-                self.bm25_doc_meta.append({
+                state.corpus.append(tokens)
+                state.corpus_raw.append(content)
+                state.doc_ids.append(str(i))
+                state.doc_meta.append({
                     'file_name':   doc.get('file_name', 'Unknown'),
                     'category':    doc.get('category',  'General'),
                     'chunk_index': doc.get('chunk_index', i),
                 })
 
-            self.bm25 = BM25Okapi(self.bm25_corpus)
-            logger.info(f"BM25 index created with {len(self.bm25_corpus)} documents")
+            state.bm25 = BM25Okapi(state.corpus)
+            self._bm25_by_user[user_id] = state
+            logger.info(f"BM25 index created for user {user_id} with {len(state.corpus)} documents")
 
         except Exception as e:
-            logger.error(f"Error setting up BM25 index: {str(e)}")
-            self.bm25 = None
-    
-    def search_bm25(self, query: str, top_k: int = 10) -> List[SearchResult]:
-        """BM25 keyword search — returns results with real content and metadata."""
-        if not self.bm25 or not BM25_AVAILABLE:
-            logger.warning("BM25 not available for search")
+            logger.error(f"Error setting up BM25 index for user {user_id}: {str(e)}")
+            self._bm25_by_user.pop(user_id, None)
+
+    def search_bm25(self, user_id: str, query: str, top_k: int = 10) -> List[SearchResult]:
+        """BM25 keyword search over one user's index — returns results with real content and metadata."""
+        state = self._bm25_by_user.get(user_id)
+        if not state or not state.bm25 or not BM25_AVAILABLE:
+            logger.warning(f"BM25 not available for search (user {user_id})")
             return []
 
         try:
             query_tokens  = query.lower().split()
-            bm25_scores   = self.bm25.get_scores(query_tokens)
+            bm25_scores   = state.bm25.get_scores(query_tokens)
             top_indices   = np.argsort(bm25_scores)[::-1][:top_k]
 
             results = []
             for idx in top_indices:
                 if bm25_scores[idx] > 0:
-                    meta = self.bm25_doc_meta[idx] if idx < len(self.bm25_doc_meta) else {}
+                    meta = state.doc_meta[idx] if idx < len(state.doc_meta) else {}
                     results.append(SearchResult(
-                        content  = self.bm25_corpus_raw[idx] if idx < len(self.bm25_corpus_raw) else ' '.join(self.bm25_corpus[idx]),
+                        content  = state.corpus_raw[idx] if idx < len(state.corpus_raw) else ' '.join(state.corpus[idx]),
                         score    = float(bm25_scores[idx]),
                         metadata = meta,
                         source   = 'bm25',
@@ -179,13 +187,14 @@ class HybridSearchEngine:
             logger.error(f"Error in BM25 search: {str(e)}")
             return []
     
-    def search_redis(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def search_redis(self, user_id: str, query: str, top_k: int = 10) -> List[SearchResult]:
         """
         Dense/vector search: embeds ``query`` with the same model used to
         embed documents, then runs a RediSearch KNN cosine-similarity query
-        against the per-chunk vector index (``retrieval.vector_index``).
-        Falls back to an empty list if Redis/the embedding model is
-        unavailable or no documents have been indexed yet.
+        (pre-filtered to this user's chunks) against the per-chunk vector
+        index (``retrieval.vector_index``). Falls back to an empty list if
+        Redis/the embedding model is unavailable or this user has no
+        documents indexed yet.
         """
         if not self.redis_client or not REDIS_AVAILABLE:
             logger.warning("Redis not available for search")
@@ -195,12 +204,12 @@ class HybridSearchEngine:
             return []
 
         try:
-            if not self.redis_client.keys("document:*"):
-                logger.info("Redis has no document keys — skipping vector search")
+            if not self.redis_client.keys(f"document:{user_id}:*"):
+                logger.info(f"User {user_id} has no document keys — skipping vector search")
                 return []
 
             query_embedding = self.model.encode(query).tolist()
-            hits = vector_index.knn_search(self.redis_client, query_embedding, top_k)
+            hits = vector_index.knn_search(self.redis_client, user_id, query_embedding, top_k)
 
             results = [
                 SearchResult(
@@ -271,19 +280,21 @@ class HybridSearchEngine:
             logger.error(f"Error in result fusion: {str(e)}")
             return []
     
-    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def search(self, user_id: str, query: str, top_k: int = 10) -> List[SearchResult]:
         """
-        Hybrid search: auto-loads the BM25 index from Redis if not yet built,
-        then combines BM25 (sparse) + vector KNN (dense) results with RRF fusion.
+        Hybrid search for one user: auto-loads that user's BM25 index from
+        Redis if not yet built, then combines BM25 (sparse) + vector KNN
+        (dense) results with RRF fusion. Every step below is scoped to
+        ``user_id`` — this method never touches another user's chunks.
         """
-        logger.info(f"Performing hybrid search for query: '{query}'")
+        logger.info(f"Performing hybrid search for user {user_id}, query: '{query}'")
 
-        # Auto-populate BM25 from Redis if the index is empty
-        if not self.bm25 and self.redis_client:
+        # Auto-populate this user's BM25 index from Redis if not cached yet
+        if user_id not in self._bm25_by_user and self.redis_client:
             try:
                 import json as _json
                 docs_for_bm25 = []
-                for key in (self.redis_client.keys('document:*') or []):
+                for key in (self.redis_client.keys(f'document:{user_id}:*') or []):
                     raw = self.redis_client.get(key)
                     if not raw:
                         continue
@@ -301,18 +312,18 @@ class HybridSearchEngine:
                             'chunk_index': ci,
                         })
                 if docs_for_bm25:
-                    self.setup_bm25_index(docs_for_bm25)
-                    logger.info(f"BM25 auto-loaded {len(docs_for_bm25)} chunks from Redis")
+                    self.setup_bm25_index(user_id, docs_for_bm25)
+                    logger.info(f"BM25 auto-loaded {len(docs_for_bm25)} chunks for user {user_id}")
             except Exception as exc:
-                logger.error(f"BM25 auto-load failed: {exc}")
+                logger.error(f"BM25 auto-load failed for user {user_id}: {exc}")
 
-        bm25_results  = self.search_bm25(query, top_k * 2)
-        redis_results = self.search_redis(query, top_k * 2)
+        bm25_results  = self.search_bm25(user_id, query, top_k * 2)
+        redis_results = self.search_redis(user_id, query, top_k * 2)
         fused_results = self.fuse_results(bm25_results, redis_results, top_k)
 
         logger.info(f"Hybrid search completed with {len(fused_results)} results")
         return fused_results
-    
+
     def get_search_stats(self) -> Dict[str, Any]:
         """
         Get statistics about the search engine.
@@ -331,6 +342,6 @@ class HybridSearchEngine:
             "bm25_available": BM25_AVAILABLE,
             "redis_available": REDIS_AVAILABLE,
             "redis_connected": self.redis_client is not None,
-            "bm25_corpus_size": len(self.bm25_corpus) if self.bm25_corpus else 0,
+            "bm25_users_cached": len(self._bm25_by_user),
             "vector_index_size": vector_doc_count,
         }

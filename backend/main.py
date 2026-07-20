@@ -314,7 +314,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         start = asyncio.get_event_loop().time()
 
         # 1. Cache check
-        cached = semantic_cache.get_cached_result(request.query)
+        cached = semantic_cache.get_cached_result(user_id, request.query)
         if cached and cached.results:
             return QueryResponse(
                 answer=cached.results[0]["answer"],
@@ -324,7 +324,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
 
         # 2. Hybrid search
         logger.info(f"Hybrid search: '{request.query}'")
-        results = hybrid_search.search(query=request.query, top_k=request.top_k)
+        results = hybrid_search.search(user_id, query=request.query, top_k=request.top_k)
 
         # 3. Re-rank
         if request.rerank_top_k > 0:
@@ -369,7 +369,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         processing_time = asyncio.get_event_loop().time() - start
 
         # 5. Cache result
-        semantic_cache.set_cached_result(request.query, [{"answer": answer, "sources": sources}])
+        semantic_cache.set_cached_result(user_id, request.query, [{"answer": answer, "sources": sources}])
 
         return QueryResponse(answer=answer, sources=sources, processing_time=processing_time)
 
