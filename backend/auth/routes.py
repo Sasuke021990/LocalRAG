@@ -114,7 +114,7 @@ async def google_login():
 
 
 @router.get("/google/callback")
-async def google_callback(code: str, response: Response):
+async def google_callback(code: str):
     userinfo = google_oauth.exchange_code_for_userinfo(code)
 
     user = store.get_user_by_google_sub(redis_client, userinfo["sub"])
@@ -126,8 +126,13 @@ async def google_callback(code: str, response: Response):
             user_id = store.create_user(redis_client, email=userinfo["email"], google_sub=userinfo["sub"])
             user = store.get_user_by_id(redis_client, user_id)
 
-    _set_session_cookie(response, user["user_id"], user["token_version"])
-    return RedirectResponse(f"{config.FRONTEND_BASE_URL}/")
+    # Set the cookie on the RedirectResponse itself, not on an injected
+    # Response param: when a handler *returns* a Response object, FastAPI
+    # discards the injected response's headers (incl. Set-Cookie). Setting
+    # it here is the only way the browser actually receives the session.
+    redirect = RedirectResponse(f"{config.FRONTEND_BASE_URL}/")
+    _set_session_cookie(redirect, user["user_id"], user["token_version"])
+    return redirect
 
 
 # ─── Password reset ─────────────────────────────────────────────────────────

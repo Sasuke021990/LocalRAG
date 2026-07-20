@@ -33,6 +33,10 @@ class Config:
     # === File Storage Configuration ===
     DOCUMENTS_DIR: str = os.getenv('DOCUMENTS_DIR', './documents')
     PROCESSED_DIR: str = os.getenv('PROCESSED_DIR', './processed')
+    # Base directory for per-user document backups + uploads. Defaults to the
+    # container mount (/app/data); overridable via env so it can point at a
+    # writable temp dir in test/CI environments that aren't running as root.
+    DATA_DIR: str = os.getenv('DATA_DIR', '/app/data')
     
     # === Cache Configuration ===
     CACHE_TTL_SECONDS: int = int(os.getenv('CACHE_TTL_SECONDS', 3600))

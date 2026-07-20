@@ -5,21 +5,16 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
-// If the backend requires an API key, inject it here server-side so it
-// never reaches the browser bundle.
-const API_KEY = process.env.API_KEY || '';
 
 // Proxy /api/* → backend (strip /api prefix)
 // e.g. /api/categories → http://backend:8000/categories
+// Auth is cookie/bearer per-request (Vaultly accounts) — http-proxy-middleware
+// forwards request cookies and backend Set-Cookie responses by default, so no
+// header injection is needed here.
 app.use('/api', createProxyMiddleware({
     target: BACKEND_URL,
     changeOrigin: true,
     pathRewrite: { '^/api': '' },
-    on: {
-        proxyReq: (proxyReq) => {
-            if (API_KEY) proxyReq.setHeader('x-api-key', API_KEY);
-        },
-    },
 }));
 
 // Proxy /swagger/* → backend (strip /swagger prefix)

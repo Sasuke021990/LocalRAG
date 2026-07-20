@@ -30,6 +30,17 @@ INDEX_NAME = "idx:chunks"
 CHUNK_KEY_PREFIX = "chunk:"
 EMBEDDING_DIM = 384
 
+# Characters that are syntactically special inside a RediSearch TAG filter
+# value and must be backslash-escaped. Production user_ids are uuid4 hex
+# (safe on their own), but escaping keeps the KNN query valid for any tag
+# value — e.g. ids containing '-' — instead of raising a query syntax error.
+_TAG_SPECIAL_CHARS = set(r",.<>{}[]\"'|:;!@#$%^&*()-+=~/\\ ")
+
+
+def escape_tag_value(value: str) -> str:
+    """Backslash-escape RediSearch TAG special characters in *value*."""
+    return "".join(f"\\{ch}" if ch in _TAG_SPECIAL_CHARS else ch for ch in value)
+
 
 def chunk_key(user_id: str, category: str, file_name: str, chunk_index: int) -> str:
     """Deterministic key for one chunk — no KEYS/SCAN needed to delete it later."""
@@ -124,7 +135,7 @@ def knn_search(redis_client: Redis, user_id: str, query_embedding: List[float], 
     """
     vector_bytes = np.array(query_embedding, dtype=np.float32).tobytes()
     query = (
-        Query(f"(@user_id:{{{user_id}}})=>[KNN {top_k} @embedding $vec AS score]")
+        Query(f"(@user_id:{{{escape_tag_value(user_id)}}})=>[KNN {top_k} @embedding $vec AS score]")
         .sort_by("score")
         .return_fields("content", "file_name", "category", "chunk_index", "score")
         .dialect(2)
