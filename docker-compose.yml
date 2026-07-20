@@ -30,9 +30,12 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      - API_KEY=${API_KEY:-}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     volumes:
-      # Mount the knowledge base directory for file storage
-      - D:\DockerData\MyKnowledge:/app/data
+      # Mount the knowledge base directory for file storage — set
+      # KNOWLEDGE_DATA_PATH in .env (copy .env.example), defaults to ./data
+      - ${KNOWLEDGE_DATA_PATH:-./data}:/app/data
       # Mount WSL library for AMD DirectML support on Windows
       - /usr/lib/wsl:/usr/lib/wsl
     # GPU Acceleration Setup:
@@ -62,6 +65,7 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - PORT=3000
+      - API_KEY=${API_KEY:-}
     restart: unless-stopped
 
 volumes:

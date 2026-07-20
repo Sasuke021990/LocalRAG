@@ -9,6 +9,11 @@ import json
 import hashlib
 from datetime import datetime, timedelta
 
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+from utils.device import get_best_device
+
 # For Redis connection and operations
 try:
     import redis
@@ -35,25 +40,37 @@ class SemanticCache:
     instantly for semantically similar queries without hitting the LLM.
     """
     
-    def __init__(self, redis_host: str = 'localhost', redis_port: int = 6379, 
-                 redis_db: int = 0, cache_prefix: str = "semantic_cache:", 
-                 default_ttl: int = 3600):
+    def __init__(self, redis_host: str = 'localhost', redis_port: int = 6379,
+                 redis_db: int = 0, cache_prefix: str = "semantic_cache:",
+                 default_ttl: int = 3600, embedding_model: str = 'all-MiniLM-L6-v2',
+                 similarity_threshold: float = 0.92):
         """
         Initialize the SemanticCache.
-        
+
         Args:
             redis_host (str): Redis server host
             redis_port (int): Redis server port
             redis_db (int): Redis database number
             cache_prefix (str): Prefix for cache keys in Redis
             default_ttl (int): Default time-to-live for cached entries (seconds)
+            embedding_model (str): SentenceTransformer model used to embed
+                queries for similarity lookups
+            similarity_threshold (float): Minimum cosine similarity for a
+                past query to count as a cache hit. Deliberately
+                conservative (default 0.92) to avoid returning a stale
+                answer for a genuinely different question.
         """
         self.redis_host = redis_host
         self.redis_port = redis_port
         self.redis_db = redis_db
         self.cache_prefix = cache_prefix
         self.default_ttl = default_ttl
-        
+        self.similarity_threshold = similarity_threshold
+        # Redis SET of active cache keys, maintained alongside the entries
+        # themselves so a semantic-similarity lookup can iterate a small
+        # candidate set instead of scanning with KEYS on every query.
+        self.index_key = f"{cache_prefix}__index__"
+
         # Initialize Redis connection
         self.redis_client = None
         if REDIS_AVAILABLE:
@@ -72,6 +89,14 @@ class SemanticCache:
                 self.redis_client = None
         else:
             logger.warning("Redis client not available - semantic cache will be disabled")
+
+        # Embedding model for semantic similarity lookups
+        try:
+            self.model = SentenceTransformer(embedding_model, device=get_best_device())
+            logger.info(f"Loaded semantic cache embedding model: {embedding_model}")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model '{embedding_model}': {str(e)}")
+            self.model = None
     
     def _generate_cache_key(self, query: str) -> str:
         """
@@ -87,137 +112,165 @@ class SemanticCache:
         query_hash = hashlib.md5(query.encode()).hexdigest()
         return f"{self.cache_prefix}{query_hash}"
     
-    def _is_semantically_similar(self, query1: str, query2: str, threshold: float = 0.8) -> bool:
+    def _embed(self, query: str) -> Optional[List[float]]:
+        """Embed a query with the cache's model. Returns None if unavailable."""
+        if not self.model or not query:
+            return None
+        return self.model.encode(query).tolist()
+
+    def _cosine_similarity(self, vec_a: List[float], vec_b: List[float]) -> float:
+        a, b = np.array(vec_a), np.array(vec_b)
+        denom = np.linalg.norm(a) * np.linalg.norm(b)
+        if denom == 0:
+            return 0.0
+        return float(np.dot(a, b) / denom)
+
+    def _is_semantically_similar(self, embedding1: List[float], embedding2: List[float],
+                                  threshold: Optional[float] = None) -> bool:
         """
-        Check if two queries are semantically similar (simplified implementation).
-        
-        In a real implementation, this would use embeddings to compare queries.
-        For now, we'll use string similarity as a placeholder.
-        
-        Args:
-            query1 (str): First query
-            query2 (str): Second query
-            threshold (float): Similarity threshold
-            
-        Returns:
-            bool: True if queries are similar enough
+        Check if two query embeddings are semantically similar via cosine
+        similarity against ``threshold`` (defaults to ``self.similarity_threshold``).
         """
-        # Simplified approach - in real implementation, use embeddings
-        # This is a placeholder that could be enhanced with actual semantic similarity
-        if not query1 or not query2:
+        if not embedding1 or not embedding2:
             return False
-            
-        # Simple string-based similarity (could be replaced with more sophisticated methods)
-        q1_lower = query1.lower().strip()
-        q2_lower = query2.lower().strip()
-        
-        # Check if one is a substring of the other (basic similarity)
-        if q1_lower in q2_lower or q2_lower in q1_lower:
-            return True
-            
-        # For demonstration, we'll return False to avoid false positives
-        # In production, implement proper semantic similarity checking
-        return False
+        threshold = self.similarity_threshold if threshold is None else threshold
+        return self._cosine_similarity(embedding1, embedding2) >= threshold
     
+    def _load_entry(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        """
+        Load and validate a raw cache entry by key. Removes it (from the
+        entry key and the key-index SET) if missing, expired, or corrupted.
+        Returns the parsed dict, or None.
+        """
+        cached_data = self.redis_client.get(cache_key)
+        if not cached_data:
+            self.redis_client.srem(self.index_key, cache_key)
+            return None
+
+        try:
+            parsed_data = json.loads(cached_data)
+            timestamp = datetime.fromisoformat(parsed_data['timestamp'])
+            ttl = parsed_data.get('ttl', self.default_ttl)
+
+            if datetime.now() - timestamp > timedelta(seconds=ttl):
+                self.redis_client.delete(cache_key)
+                self.redis_client.srem(self.index_key, cache_key)
+                return None
+
+            return parsed_data
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Error parsing cached entry '{cache_key}': {str(e)}")
+            self.redis_client.delete(cache_key)
+            self.redis_client.srem(self.index_key, cache_key)
+            return None
+
     def get_cached_result(self, query: str) -> Optional[CachedResult]:
         """
-        Retrieve a cached result for the given query.
-        
+        Retrieve a cached result for the given query: first an exact
+        (MD5-hash) match, then — if that misses and an embedding model is
+        available — the most similar past query above
+        ``self.similarity_threshold``.
+
         Args:
             query (str): The search query
-            
+
         Returns:
             CachedResult or None if not found or expired
         """
         if not self.redis_client or not REDIS_AVAILABLE:
             logger.warning("Redis not available - cannot retrieve from cache")
             return None
-        
+
         try:
-            # Generate cache key
+            # 1. Exact-match fast path
             cache_key = self._generate_cache_key(query)
-            
-            # Get cached data
-            cached_data = self.redis_client.get(cache_key)
-            if not cached_data:
-                logger.debug(f"No cached result found for query: {query}")
-                return None
-            
-            # Parse cached data
-            try:
-                parsed_data = json.loads(cached_data)
-                
-                # Check if cache entry is still valid (not expired)
-                timestamp = datetime.fromisoformat(parsed_data['timestamp'])
-                ttl = parsed_data.get('ttl', self.default_ttl)
-                
-                if datetime.now() - timestamp > timedelta(seconds=ttl):
-                    # Entry expired, remove it
-                    self.redis_client.delete(cache_key)
-                    logger.debug(f"Cached result expired for query: {query}")
-                    return None
-                
-                # Return cached result
-                cached_result = CachedResult(
+            parsed_data = self._load_entry(cache_key)
+            if parsed_data:
+                logger.info(f"Cache hit (exact) for query: {query}")
+                return CachedResult(
                     query=query,
                     results=parsed_data['results'],
-                    timestamp=timestamp,
-                    ttl=ttl
+                    timestamp=datetime.fromisoformat(parsed_data['timestamp']),
+                    ttl=parsed_data.get('ttl', self.default_ttl),
                 )
-                
-                logger.info(f"Cache hit for query: {query}")
-                return cached_result
-                
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.error(f"Error parsing cached data for query {query}: {str(e)}")
-                # Remove corrupted cache entry
-                self.redis_client.delete(cache_key)
+
+            # 2. Semantic-similarity fallback
+            query_embedding = self._embed(query)
+            if not query_embedding:
                 return None
-                
+
+            best_match, best_score = None, 0.0
+            for candidate_key in self.redis_client.smembers(self.index_key):
+                if candidate_key == cache_key:
+                    continue
+                candidate = self._load_entry(candidate_key)
+                if not candidate or not candidate.get('embedding'):
+                    continue
+                score = self._cosine_similarity(query_embedding, candidate['embedding'])
+                if score >= self.similarity_threshold and score > best_score:
+                    best_match, best_score = candidate, score
+
+            if best_match:
+                logger.info(
+                    f"Cache hit (semantic, score={best_score:.4f}) for query: "
+                    f"'{query}' ~ '{best_match.get('query')}'"
+                )
+                return CachedResult(
+                    query=query,
+                    results=best_match['results'],
+                    timestamp=datetime.fromisoformat(best_match['timestamp']),
+                    ttl=best_match.get('ttl', self.default_ttl),
+                )
+
+            logger.debug(f"No cached result found for query: {query}")
+            return None
+
         except Exception as e:
             logger.error(f"Error retrieving from cache: {str(e)}")
             return None
-    
-    def set_cached_result(self, query: str, results: List[Dict[str, Any]], 
+
+    def set_cached_result(self, query: str, results: List[Dict[str, Any]],
                          ttl: int = None) -> bool:
         """
         Store a result in the semantic cache.
-        
+
         Args:
             query (str): The search query
             results (List): List of search results to cache
             ttl (int): Time-to-live for this entry (seconds)
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
         if not self.redis_client or not REDIS_AVAILABLE:
             logger.warning("Redis not available - cannot store in cache")
             return False
-        
+
         try:
             # Use default TTL if not specified
             if ttl is None:
                 ttl = self.default_ttl
-            
+
             # Create cache entry
             cached_entry = {
                 'query': query,
                 'results': results,
                 'timestamp': datetime.now().isoformat(),
-                'ttl': ttl
+                'ttl': ttl,
+                'embedding': self._embed(query),
             }
-            
+
             # Generate cache key
             cache_key = self._generate_cache_key(query)
-            
+
             # Store in Redis as JSON string with TTL
             json_data = json.dumps(cached_entry)
             self.redis_client.setex(cache_key, ttl, json_data)
-            
+            self.redis_client.sadd(self.index_key, cache_key)
+
             logger.info(f"Stored cached result for query: {query} (TTL: {ttl}s)")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error storing in cache: {str(e)}")
             return False
@@ -261,15 +314,17 @@ class SemanticCache:
             return {"error": "Redis not available"}
         
         try:
-            # Get approximate number of keys matching our prefix
+            # Get approximate number of keys matching our prefix (excluding
+            # the key-index SET itself, which isn't a cache entry)
             pattern = f"{self.cache_prefix}*"
-            keys = self.redis_client.keys(pattern)
-            
+            keys = [k for k in self.redis_client.keys(pattern) if k != self.index_key]
+
             return {
                 "redis_connected": True,
                 "cache_prefix": self.cache_prefix,
                 "cached_entries": len(keys),
-                "default_ttl": self.default_ttl
+                "default_ttl": self.default_ttl,
+                "similarity_threshold": self.similarity_threshold,
             }
         except Exception as e:
             logger.error(f"Error getting cache stats: {str(e)}")

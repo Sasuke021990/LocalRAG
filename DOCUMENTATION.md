@@ -53,7 +53,7 @@ Redis Stack (:6379)
         v
 Mounted Volume
   Container: /app/data
-  Host:      D:\DockerData\MyKnowledge\
+  Host:      $KNOWLEDGE_DATA_PATH
     <category>/
       document.json   <- JSON backup (original file deleted after ingest)
 `
@@ -122,7 +122,7 @@ LocalRAG uses two complementary storage layers:
 | Layer | Technology | Location | Purpose |
 |---|---|---|---|
 | Fast store | Redis | Docker volume redis_data | Sub-millisecond search |
-| Durable backup | JSON files | /app/data/<category>/ -> D:\DockerData\MyKnowledge\ | Survive container wipes |
+| Durable backup | JSON files | /app/data/<category>/ -> $KNOWLEDGE_DATA_PATH | Survive container wipes |
 
 ### Redis Key Format
 
@@ -133,14 +133,25 @@ LocalRAG uses two complementary storage layers:
       document:Research:arxiv_paper.pdf
       document:Finance:q4_report.docx
 
+### Vector Index
+
+Each chunk is additionally written to its own HASH (`chunk:<category>:<file>:<chunk_index>`)
+and indexed by a RediSearch HNSW vector field (`idx:chunks`, cosine
+similarity, 384-dim) so queries can run a real KNN search instead of
+scanning every chunk. This index is fully derived from the `document:*`
+blobs and is rebuilt automatically by the startup re-index if it's ever
+out of date. Inspect it directly with:
+
+    redis-cli FT.INFO idx:chunks
+
 ### JSON Backup Format
 
 Each processed document produces a .json file at:
-    D:\DockerData\MyKnowledge\<category>\<stem>.json
+    $KNOWLEDGE_DATA_PATH/<category>/<stem>.json
 
 Example uploading research_paper.pdf to category Research:
-    D:\DockerData\MyKnowledge\
-      Research\
+    $KNOWLEDGE_DATA_PATH/
+      Research/
         research_paper.json   <- backup (original .pdf is deleted)
 
 JSON structure:
@@ -163,14 +174,14 @@ JSON structure:
 | docker-compose down | Safe | Safe | None needed |
 | docker-compose down -v | LOST | Safe | Auto re-indexed on next start |
 | docker volume prune | LOST | Safe | Auto re-indexed on next start |
-| Delete D:\DockerData\MyKnowledge | Safe (until restart) | LOST | Re-upload documents |
+| Delete $KNOWLEDGE_DATA_PATH | Safe (until restart) | LOST | Re-upload documents |
 | New machine | LOST | Copy folder | Copy + restart |
 
 ---
 
 ## 5. Category System
 
-Categories are real directories on your mapped volume. Creating a category Finance immediately creates D:\DockerData\MyKnowledge\Finance\.
+Categories are real directories on your mapped volume. Creating a category Finance immediately creates $KNOWLEDGE_DATA_PATH/Finance/.
 
 ### Via UI
 Knowledge Base tab -> Categories panel -> enter name -> Create Category
@@ -334,27 +345,34 @@ Embeds Swagger UI - click any endpoint, Try it out, Execute to test live.
 ## 9. Backup and Restore
 
 ### Backup
-    Copy-Item -Recurse "D:\DockerData\MyKnowledge" "D:\Backups\MyKnowledge-20260521"
+    Copy-Item -Recurse "$KNOWLEDGE_DATA_PATH" "$KNOWLEDGE_DATA_PATH-backup-20260521"
 
 ### Restore to new machine
-1. Copy D:\DockerData\MyKnowledge\ to the new machine
+1. Copy $KNOWLEDGE_DATA_PATH to the new machine
 2. Update docker-compose.yml volume path if needed
 3. Run docker-compose up -d
 4. Startup re-index will auto-populate Redis from JSON backups
 
 ### Inspect a document
-    Get-Content "D:\DockerData\MyKnowledge\Research\my_paper.json" | python -m json.tool
+    Get-Content "$KNOWLEDGE_DATA_PATH/Research/my_paper.json" | python -m json.tool
 
 ---
 
 ## 10. Configuration
 
 ### Environment Variables
+Set these in `.env` (copy from `.env.example`) — `docker-compose.yml` reads them at startup.
+
 | Variable | Default | Description |
 |---|---|---|
 | REDIS_HOST | redis | Redis hostname |
 | REDIS_PORT | 6379 | Redis port |
 | REDIS_DB   | 0    | Redis database |
+| KNOWLEDGE_DATA_PATH | ./data | Host directory mounted at /app/data |
+| REDIS_DATA_PATH | (named volume) | Host directory mounted at /data (TrueNAS compose only) |
+| API_KEY | (unset) | If set, required as the `x-api-key` header on every route except GET / and GET /health |
+| CORS_ALLOWED_ORIGINS | http://localhost:3000 | Comma-separated list of allowed CORS origins |
+| SEMANTIC_CACHE_SIMILARITY_THRESHOLD | 0.92 | Minimum cosine similarity for a semantic cache hit |
 
 ### Embedding Model
 Default: all-MiniLM-L6-v2 (384-dim, ~80MB, fast)
@@ -365,9 +383,9 @@ Default: cross-encoder/ms-marco-MiniLM-L-6-v2
 Change in backend/main.py: model_name="cross-encoder/ms-marco-MiniLM-L-12-v2"
 
 ### Volume Path
-Edit docker-compose.yml:
-    volumes:
-      - D:\DockerData\MyKnowledge:/app/data
+Set `KNOWLEDGE_DATA_PATH` in `.env` (docker-compose.yml reads it via
+`${KNOWLEDGE_DATA_PATH:-./data}` — no need to edit the compose file itself):
+    KNOWLEDGE_DATA_PATH=/your/host/path
 
 ---
 
@@ -381,7 +399,7 @@ Common: Redis not ready (wait 10s), port 8000 in use.
 Processing is async - wait 10-30s then check:
     curl http://localhost:8000/documents
 
-### Files not in D:\DockerData\MyKnowledge
+### Files not in $KNOWLEDGE_DATA_PATH
 Original files ARE deleted after ingestion. Only *.json backups persist.
 
 ### Query returns empty results
@@ -393,6 +411,6 @@ Backend needs ~30-60s on first start (downloads ML models).
     docker logs local-rag-backend
 
 ### docker-compose down -v lost Redis data
-JSON backups in D:\DockerData\MyKnowledge are intact. Just run:
+JSON backups in $KNOWLEDGE_DATA_PATH are intact. Just run:
     docker-compose up -d
 Startup re-index restores everything automatically.

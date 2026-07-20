@@ -8,8 +8,9 @@ services:
       - "6379:6379"
       - "8001:8001"
     volumes:
-      # Map this to a TrueNAS dataset for your Vector database
-      - /mnt/pool1/ShashiCloud/localrag/redis:/data
+      # Map this to a TrueNAS dataset for your Vector database —
+      # set REDIS_DATA_PATH in .env (copy .env.example)
+      - ${REDIS_DATA_PATH:?Set REDIS_DATA_PATH in .env}:/data
     command: redis-stack-server --appendonly yes
     environment:
       - REDIS_ARGS=--appendonly yes
@@ -29,10 +30,13 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
+      - API_KEY=${API_KEY:-}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     volumes:
-      # Map this to your TrueNAS dataset for embedded files / JSON backups
-      - /mnt/pool1/ShashiCloud/localrag/knowledge:/app/data
-    
+      # Map this to your TrueNAS dataset for embedded files / JSON backups —
+      # set KNOWLEDGE_DATA_PATH in .env (copy .env.example)
+      - ${KNOWLEDGE_DATA_PATH:?Set KNOWLEDGE_DATA_PATH in .env}:/app/data
+
     # Optional NVIDIA GPU Support for TrueNAS
     # deploy:
     #   resources:
@@ -56,4 +60,5 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - PORT=3000
+      - API_KEY=${API_KEY:-}
     restart: unless-stopped

@@ -15,6 +15,15 @@ When an AI agent (like Claude Desktop or Cursor) decides it needs to search your
    npm install
    ```
 
+## Configuration
+
+Set these environment variables before starting the server (e.g. in your MCP client's `env` config):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LOCALRAG_API_URL` | `http://127.0.0.1:8000` | Base URL of the running LocalRAG backend |
+| `LOCALRAG_API_KEY` | *(unset)* | Sent as the `x-api-key` header. Only required if the backend has `API_KEY` set (auth is disabled by default) |
+
 ## Connecting to AI Clients
 
 ### 1. Cursor IDE

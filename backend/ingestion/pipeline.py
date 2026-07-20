@@ -26,6 +26,7 @@ import redis
 from docx import Document as DocxDocument
 from sentence_transformers import SentenceTransformer
 
+from retrieval import vector_index
 from utils.device import get_best_device
 
 ALLOWED_EXTENSIONS = {
@@ -76,6 +77,7 @@ class DocumentIngestionPipeline:
             )
             self.redis_client.ping()
             logger.info(f"Connected to Redis at {redis_host}:{redis_port}")
+            vector_index.ensure_index(self.redis_client)
         except Exception as exc:
             logger.error(f"Failed to connect to Redis: {exc}")
             raise
@@ -102,6 +104,14 @@ class DocumentIngestionPipeline:
         Scan every ``*.json`` backup under *data_dir* and restore any
         documents missing from Redis.  Called automatically on app startup.
 
+        This is also the migration path for the RediSearch chunk vector
+        index: every backup's chunks are re-written to their ``chunk:*``
+        HASHes (via ``vector_index.index_chunk``) on every call, regardless
+        of whether the ``document:*`` blob already existed. That write is
+        idempotent (HSET), so upgrading an existing deployment to real
+        vector search only requires one backend restart to backfill the
+        index for documents ingested before this feature existed.
+
         Returns the number of documents that were re-indexed.
         """
         data_path = Path(data_dir)
@@ -126,6 +136,13 @@ class DocumentIngestionPipeline:
                         self.redis_client.set(doc_key, json.dumps(data))
                         count += 1
                         logger.info(f"Re-indexed: {doc_key}")
+
+                    chunks = data.get("chunks", [])
+                    embeddings = data.get("embeddings", [])
+                    for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+                        vector_index.index_chunk(
+                            self.redis_client, category, file_name, i, chunk_text, embedding
+                        )
                 except Exception as exc:
                     logger.error(f"Error re-indexing {json_file}: {exc}")
 
@@ -166,8 +183,13 @@ class DocumentIngestionPipeline:
         """
         try:
             doc_key = f"document:{category}:{file_name}"
+
+            raw = self.redis_client.get(doc_key)
+            chunk_count = json.loads(raw).get("chunk_count", 0) if raw else 0
+
             self.redis_client.delete(doc_key)
-            logger.info(f"Deleted from Redis: {doc_key}")
+            vector_index.delete_chunks(self.redis_client, category, file_name, chunk_count)
+            logger.info(f"Deleted from Redis: {doc_key} ({chunk_count} chunk(s))")
 
             # Remove JSON backup
             stem = Path(file_name).stem
@@ -284,7 +306,11 @@ class DocumentIngestionPipeline:
             "processed_at": datetime.now().isoformat(),
         }
         self.redis_client.set(doc_key, json.dumps(data))
-        logger.info(f"Stored in Redis: {doc_key} ({len(chunks)} chunks)")
+
+        for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+            vector_index.index_chunk(self.redis_client, category, file_name, i, chunk_text, embedding)
+
+        logger.info(f"Stored in Redis: {doc_key} ({len(chunks)} chunks, vector-indexed)")
 
     def _save_json_backup(
         self,
@@ -405,6 +431,8 @@ class DocumentIngestionPipeline:
         return chunks
 
     def _get_overlap(self, text: str, size: int) -> str:
+        if size <= 0:
+            return ""
         if len(text) <= size:
             return text
         start = max(0, len(text) - size)

@@ -1,5 +1,5 @@
 """
-Hybrid search implementation using BM25 (sparse) and Redis (dense/vector)
+Hybrid search implementation using BM25 (sparse) and RediSearch vector KNN (dense)
 """
 
 import logging
@@ -23,6 +23,11 @@ except ImportError:
     REDIS_AVAILABLE = False
     logging.warning("redis not available - Redis integration disabled")
 
+from sentence_transformers import SentenceTransformer
+
+from retrieval import vector_index
+from utils.device import get_best_device
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -36,29 +41,39 @@ class SearchResult:
 class HybridSearchEngine:
     """
     A hybrid search engine combining BM25 (sparse) and Redis (dense/vector) searches.
-    
+
     This implementation:
     1. Uses BM25 for keyword-based sparse search
-    2. Uses Redis with vector embeddings for dense semantic search
+    2. Uses a RediSearch HNSW vector index (see ``retrieval.vector_index``) for
+       dense semantic search via cosine-similarity KNN
     3. Fuses results using Reciprocal Rank Fusion (RRF)
+
+    Document ingestion (parsing, chunking, embedding, storage) is owned by
+    ``ingestion.pipeline.DocumentIngestionPipeline`` — this class is
+    read/query-only.
     """
-    
-    def __init__(self, redis_host: str = 'localhost', redis_port: int = 6379, 
-                 redis_db: int = 0, bm25_tokenizer: str = 'english'):
+
+    def __init__(self, redis_host: str = 'localhost', redis_port: int = 6379,
+                 redis_db: int = 0, bm25_tokenizer: str = 'english',
+                 embedding_model: str = 'all-MiniLM-L6-v2'):
         """
         Initialize the HybridSearchEngine.
-        
+
         Args:
             redis_host (str): Redis server host
             redis_port (int): Redis server port
             redis_db (int): Redis database number
             bm25_tokenizer (str): Tokenizer for BM25 (default: 'english')
+            embedding_model (str): SentenceTransformer model used to embed
+                queries — must match the model used to embed documents
+                (``ingestion.pipeline``'s default), otherwise cosine
+                similarity between query and chunk vectors is meaningless.
         """
         self.redis_host = redis_host
         self.redis_port = redis_port
         self.redis_db = redis_db
         self.bm25_tokenizer = bm25_tokenizer
-        
+
         # Initialize Redis connection
         self.redis_client = None
         if REDIS_AVAILABLE:
@@ -72,12 +87,21 @@ class HybridSearchEngine:
                 # Test connection
                 self.redis_client.ping()
                 logger.info(f"Connected to Redis at {redis_host}:{redis_port}")
+                vector_index.ensure_index(self.redis_client)
             except Exception as e:
                 logger.error(f"Failed to connect to Redis: {str(e)}")
                 self.redis_client = None
         else:
             logger.warning("Redis client not available - vector search will be disabled")
-        
+
+        # Query embedding model (must match the document embedding model)
+        try:
+            self.model = SentenceTransformer(embedding_model, device=get_best_device())
+            logger.info(f"Loaded query embedding model: {embedding_model}")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model '{embedding_model}': {str(e)}")
+            self.model = None
+
         # Initialize BM25
         self.bm25 = None
         self.bm25_corpus = []          # tokenised token lists
@@ -157,65 +181,45 @@ class HybridSearchEngine:
     
     def search_redis(self, query: str, top_k: int = 10) -> List[SearchResult]:
         """
-        Read all documents stored in Redis (``document:*`` keys) and return
-        the chunks that are most relevant to ``query`` by cosine similarity
-        on pre-stored embeddings.  Falls back to BM25-only if Redis is empty.
+        Dense/vector search: embeds ``query`` with the same model used to
+        embed documents, then runs a RediSearch KNN cosine-similarity query
+        against the per-chunk vector index (``retrieval.vector_index``).
+        Falls back to an empty list if Redis/the embedding model is
+        unavailable or no documents have been indexed yet.
         """
         if not self.redis_client or not REDIS_AVAILABLE:
             logger.warning("Redis not available for search")
             return []
+        if not self.model:
+            logger.warning("Embedding model not available - skipping vector search")
+            return []
 
         try:
-            import json as _json
-            keys = self.redis_client.keys("document:*")
-            if not keys:
-                logger.info("Redis has no document keys — skipping Redis search")
+            if not self.redis_client.keys("document:*"):
+                logger.info("Redis has no document keys — skipping vector search")
                 return []
 
-            all_chunks: List[SearchResult] = []
-            query_lower = query.lower()
+            query_embedding = self.model.encode(query).tolist()
+            hits = vector_index.knn_search(self.redis_client, query_embedding, top_k)
 
-            for key in keys:
-                raw = self.redis_client.get(key)
-                if not raw:
-                    continue
-                try:
-                    doc = _json.loads(raw)
-                except Exception:
-                    continue
-
-                file_name = doc.get('file_name', 'Unknown')
-                category  = doc.get('category',  'General')
-                chunks    = doc.get('chunks', [])
-                embeddings = doc.get('embeddings', [])
-
-                for ci, chunk_text in enumerate(chunks):
-                    # Simple keyword relevance as a lightweight score
-                    text_lower = chunk_text.lower()
-                    words_q = set(query_lower.split())
-                    words_c = set(text_lower.split())
-                    overlap = len(words_q & words_c)
-                    score = overlap / max(len(words_q), 1)
-
-                    all_chunks.append(SearchResult(
-                        content  = chunk_text,
-                        score    = score,
-                        metadata = {
-                            'file_name':   file_name,
-                            'category':    category,
-                            'chunk_index': ci,
-                        },
-                        source='redis',
-                    ))
-
-            # Sort by relevance score and return top_k
-            all_chunks.sort(key=lambda r: r.score, reverse=True)
-            top = all_chunks[:top_k]
-            logger.info(f"Redis search returned {len(top)} results for query: '{query}'")
-            return top
+            results = [
+                SearchResult(
+                    content=hit['content'],
+                    score=hit['score'],
+                    metadata={
+                        'file_name':   hit['file_name'],
+                        'category':    hit['category'],
+                        'chunk_index': hit['chunk_index'],
+                    },
+                    source='vector',
+                )
+                for hit in hits
+            ]
+            logger.info(f"Vector search returned {len(results)} results for query: '{query}'")
+            return results
 
         except Exception as e:
-            logger.error(f"Error in Redis search: {str(e)}")
+            logger.error(f"Error in vector search: {str(e)}")
             return []
     
     def fuse_results(
@@ -270,7 +274,7 @@ class HybridSearchEngine:
     def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
         """
         Hybrid search: auto-loads the BM25 index from Redis if not yet built,
-        then combines BM25 + Redis keyword results with RRF fusion.
+        then combines BM25 (sparse) + vector KNN (dense) results with RRF fusion.
         """
         logger.info(f"Performing hybrid search for query: '{query}'")
 
@@ -309,46 +313,24 @@ class HybridSearchEngine:
         logger.info(f"Hybrid search completed with {len(fused_results)} results")
         return fused_results
     
-    def add_document(self, doc_id: str, content: str, metadata: Dict[str, Any] = None) -> bool:
-        """
-        Add a document to Redis vector database (simplified for demo).
-        
-        Args:
-            doc_id (str): Unique identifier for the document
-            content (str): Document content
-            metadata (Dict): Additional metadata
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self.redis_client or not REDIS_AVAILABLE:
-            logger.warning("Redis not available - cannot add document")
-            return False
-        
-        try:
-            # In a real implementation, this would:
-            # 1. Generate embeddings for content
-            # 2. Store the embedding in Redis with doc_id as key
-            # 3. Store metadata separately
-            
-            # Mock implementation
-            logger.info(f"Mock: Added document {doc_id} to Redis")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error adding document to Redis: {str(e)}")
-            return False
-    
     def get_search_stats(self) -> Dict[str, Any]:
         """
         Get statistics about the search engine.
-        
+
         Returns:
             Dictionary with search engine statistics
         """
+        vector_doc_count = 0
+        if self.redis_client:
+            try:
+                vector_doc_count = int(self.redis_client.ft(vector_index.INDEX_NAME).info().get('num_docs', 0))
+            except Exception:
+                pass
+
         return {
             "bm25_available": BM25_AVAILABLE,
             "redis_available": REDIS_AVAILABLE,
             "redis_connected": self.redis_client is not None,
-            "bm25_corpus_size": len(self.bm25_corpus) if self.bm25_corpus else 0
+            "bm25_corpus_size": len(self.bm25_corpus) if self.bm25_corpus else 0,
+            "vector_index_size": vector_doc_count,
         }

@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -30,6 +30,7 @@ from ingestion.pipeline import DocumentIngestionPipeline
 from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker
 from retrieval.semantic_cache import SemanticCache
+from utils.config import config
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -56,34 +57,43 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ALLOWED_ORIGINS_LIST,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─── Component initialisation ─────────────────────────────────────────────────
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB   = int(os.getenv("REDIS_DB", 0))
 
+async def require_api_key(x_api_key: Optional[str] = Header(None)) -> None:
+    """
+    Guard dependency applied to every route except GET / and GET /health.
+    A no-op when API_KEY is unset (default), preserving the app's
+    zero-friction local-only behavior.
+    """
+    if config.API_KEY and x_api_key != config.API_KEY:
+        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+
+
+# ─── Component initialisation ─────────────────────────────────────────────────
 try:
     ingestion_pipeline = DocumentIngestionPipeline(
-        redis_host=REDIS_HOST,
-        redis_port=REDIS_PORT,
-        redis_db=REDIS_DB,
-        embedding_model="all-MiniLM-L6-v2",
+        redis_host=config.REDIS_HOST,
+        redis_port=config.REDIS_PORT,
+        redis_db=config.REDIS_DB,
+        embedding_model=config.EMBEDDING_MODEL_NAME,
     )
     hybrid_search = HybridSearchEngine(
-        redis_host=REDIS_HOST,
-        redis_port=REDIS_PORT,
-        redis_db=REDIS_DB,
+        redis_host=config.REDIS_HOST,
+        redis_port=config.REDIS_PORT,
+        redis_db=config.REDIS_DB,
+        embedding_model=config.EMBEDDING_MODEL_NAME,
     )
-    reranker      = CrossEncoderReranker(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    reranker      = CrossEncoderReranker(model_name=config.CROSS_ENCODER_MODEL_NAME)
     semantic_cache = SemanticCache(
-        redis_host=REDIS_HOST,
-        redis_port=REDIS_PORT,
-        redis_db=REDIS_DB,
+        redis_host=config.REDIS_HOST,
+        redis_port=config.REDIS_PORT,
+        redis_db=config.REDIS_DB,
+        similarity_threshold=config.SEMANTIC_CACHE_SIMILARITY_THRESHOLD,
     )
     logger.info("All components initialised successfully")
 except Exception as exc:
@@ -139,7 +149,7 @@ async def health_check():
 # ─── Categories ───────────────────────────────────────────────────────────────
 
 @app.get("/categories", tags=["Categories"],
-         summary="List all document categories")
+         summary="List all document categories", dependencies=[Depends(require_api_key)])
 async def list_categories():
     """
     Returns the names of all category folders that exist under ``/app/data/``.
@@ -155,12 +165,12 @@ async def list_categories():
 
 
 @app.post("/categories", tags=["Categories"],
-          summary="Create a new category")
+          summary="Create a new category", dependencies=[Depends(require_api_key)])
 async def create_category(request: CategoryCreate):
     """
     Creates a new category folder under ``/app/data/<name>/``.
     The folder is also immediately visible on the Docker-mapped host path
-    ``D:\\DockerData\\MyKnowledge\\<name>\\``.
+    (``KNOWLEDGE_DATA_PATH`` from ``.env``) at ``<KNOWLEDGE_DATA_PATH>/<name>/``.
     """
     try:
         # Sanitise name — prevent path traversal
@@ -179,7 +189,7 @@ async def create_category(request: CategoryCreate):
 # ─── Documents ────────────────────────────────────────────────────────────────
 
 @app.get("/documents", tags=["Documents"],
-         summary="List all indexed documents")
+         summary="List all indexed documents", dependencies=[Depends(require_api_key)])
 async def list_documents():
     """
     Returns metadata for every document currently indexed in Redis.
@@ -193,7 +203,7 @@ async def list_documents():
 
 
 @app.delete("/documents/{file_name}", tags=["Documents"],
-            summary="Delete a document")
+            summary="Delete a document", dependencies=[Depends(require_api_key)])
 async def delete_document(file_name: str, category: str = "General"):
     """
     Removes the document from Redis **and** deletes its JSON backup from disk.
@@ -214,7 +224,7 @@ async def delete_document(file_name: str, category: str = "General"):
 # ─── Upload ───────────────────────────────────────────────────────────────────
 
 @app.post("/upload", tags=["Documents"],
-          summary="Upload and ingest a document")
+          summary="Upload and ingest a document", dependencies=[Depends(require_api_key)])
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Document file to ingest"),
@@ -290,7 +300,7 @@ async def upload_document(
 # ─── Query ────────────────────────────────────────────────────────────────────
 
 @app.post("/query", response_model=QueryResponse, tags=["Search"],
-          summary="Hybrid search + re-rank + cache")
+          summary="Hybrid search + re-rank + cache", dependencies=[Depends(require_api_key)])
 async def query_documents(request: QueryRequest):
     """
     Query the knowledge base using the full RAG pipeline:
@@ -372,7 +382,7 @@ async def query_documents(request: QueryRequest):
 # ─── SSE progress stream ──────────────────────────────────────────────────────
 
 @app.get("/progress/{task_id}", tags=["System"],
-         summary="SSE progress stream for a background task")
+         summary="SSE progress stream for a background task", dependencies=[Depends(require_api_key)])
 async def stream_progress(task_id: str):
     """
     Server-Sent Events endpoint that streams progress updates (0–100 %)
