@@ -32,6 +32,7 @@ from ingestion.pipeline import DocumentIngestionPipeline
 from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker
 from retrieval.semantic_cache import SemanticCache
+from utils import quota
 from utils.config import config
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -208,7 +209,7 @@ async def delete_document(
         freed_bytes = ingestion_pipeline.delete_document(file_name, category, user_id)
         if freed_bytes is None:
             raise HTTPException(status_code=404, detail="Document not found")
-        # NOTE: quota.record_deleted_document(...) wiring lands in Phase 1.5.
+        quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed_bytes)
         return {"status": "deleted", "file_name": file_name, "category": category}
     except HTTPException:
         raise
@@ -251,16 +252,23 @@ async def upload_document(
         # Sanitise category
         safe_cat = category.strip().replace("/", "_").replace("\\", "_").replace("..", "_") or "General"
 
+        content = await file.read()
+
+        # Cheap pre-check using the raw upload size as an upper-bound
+        # heuristic -- rejects obviously-over-quota uploads immediately,
+        # before any file is written or processing is queued. The
+        # authoritative check (using the actual post-ingestion stored
+        # size) happens in _process() below, since embedding overhead
+        # isn't known until after processing.
+        quota.check_upload_allowed(ingestion_pipeline.redis_client, user_id, len(content))
+
         # Ensure directory exists and save file
         category_dir = DATA_DIR / user_id / safe_cat
         category_dir.mkdir(parents=True, exist_ok=True)
         file_path = str(category_dir / file.filename)
 
-        content = await file.read()
         with open(file_path, "wb") as fh:
             fh.write(content)
-
-        # NOTE: quota.check_upload_allowed(...) pre-check lands in Phase 1.5.
 
         # Queue background processing
         # NOTE: Plain `def` (not `async def`) so FastAPI routes this to a
@@ -276,8 +284,15 @@ async def upload_document(
                     category=safe_cat,
                 )
                 logger.info(f"Processed: {file.filename} → {safe_cat} | {result['total_chunks']} chunks")
-                # NOTE: quota.record_ingested_document(...) + over-quota
-                # rollback lands in Phase 1.5.
+
+                quota.record_ingested_document(ingestion_pipeline.redis_client, user_id, result["stored_bytes"])
+                if quota.is_over_quota(ingestion_pipeline.redis_client, user_id):
+                    freed = ingestion_pipeline.delete_document(file.filename, safe_cat, user_id)
+                    if freed is not None:
+                        quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed)
+                    logger.warning(
+                        f"Rolled back '{file.filename}' for user {user_id}: quota exceeded after ingestion"
+                    )
             except Exception as exc:
                 logger.error(f"Background processing failed for '{file.filename}': {exc}")
 
