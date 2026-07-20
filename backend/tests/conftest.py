@@ -154,6 +154,34 @@ def auth_client(redis_client):
 
 
 @pytest.fixture
+def api_client(redis_client):
+    """
+    A TestClient mounting the real auth + integrations routers plus a
+    /probe route guarded by require_current_user -- same rationale as
+    ``auth_client`` (avoids main.py's RediSearch-dependent component
+    init). Used by the integrations HTTP tests to exercise token/webhook
+    management (session-only) and to prove an MCP token can reach a
+    require_current_user route but not a require_session_user one.
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from auth import routes as auth_routes
+    from auth.dependencies import require_current_user
+    from integrations import routes as integrations_routes
+
+    app = FastAPI()
+    app.include_router(auth_routes.router, prefix="/auth")
+    app.include_router(integrations_routes.router, prefix="/integrations")
+
+    @app.get("/probe")
+    async def _probe(user_id: str = Depends(require_current_user)):
+        return {"user_id": user_id}
+
+    return TestClient(app)
+
+
+@pytest.fixture
 def test_user(redis_client):
     """A real user row in Redis, for tests that need a valid user_id without going through HTTP signup."""
     from auth import passwords, store

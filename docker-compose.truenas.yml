@@ -42,6 +42,8 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM=${SMTP_FROM:-noreply@vaultly.local}
       - SMTP_USE_TLS=${SMTP_USE_TLS:-True}
+      - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
+      - WEBHOOK_TIMEOUT_SECONDS=${WEBHOOK_TIMEOUT_SECONDS:-5}
     volumes:
       # Map this to your TrueNAS dataset for embedded files / JSON backups —
       # set KNOWLEDGE_DATA_PATH in .env (copy .env.example)

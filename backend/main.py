@@ -28,6 +28,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from auth import routes as auth_routes
 from auth.dependencies import require_current_user
+from auth.redis_client import redis_client as auth_redis_client
+from integrations import routes as integrations_routes
+from integrations import webhooks
 from ingestion.pipeline import DocumentIngestionPipeline
 from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker
@@ -67,6 +70,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_routes.router, prefix="/auth", tags=["Auth"])
+app.include_router(integrations_routes.router, prefix="/integrations", tags=["Integrations"])
 
 
 # ─── Component initialisation ─────────────────────────────────────────────────
@@ -197,6 +201,7 @@ async def list_documents(user_id: str = Depends(require_current_user)):
 @app.delete("/documents/{file_name}", tags=["Documents"], summary="Delete a document")
 async def delete_document(
     file_name: str,
+    background_tasks: BackgroundTasks,
     category: str = "General",
     user_id: str = Depends(require_current_user),
 ):
@@ -210,6 +215,13 @@ async def delete_document(
         if freed_bytes is None:
             raise HTTPException(status_code=404, detail="Document not found")
         quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed_bytes)
+        background_tasks.add_task(
+            webhooks.dispatch_event,
+            auth_redis_client,
+            user_id,
+            "document.deleted",
+            {"file_name": file_name, "category": category},
+        )
         return {"status": "deleted", "file_name": file_name, "category": category}
     except HTTPException:
         raise
@@ -293,8 +305,21 @@ async def upload_document(
                     logger.warning(
                         f"Rolled back '{file.filename}' for user {user_id}: quota exceeded after ingestion"
                     )
+                    webhooks.dispatch_event(
+                        auth_redis_client, user_id, "document.ingest_failed",
+                        {"file_name": file.filename, "category": safe_cat, "reason": "quota_exceeded"},
+                    )
+                else:
+                    webhooks.dispatch_event(
+                        auth_redis_client, user_id, "document.ingested",
+                        {"file_name": file.filename, "category": safe_cat, "chunk_count": result["total_chunks"]},
+                    )
             except Exception as exc:
                 logger.error(f"Background processing failed for '{file.filename}': {exc}")
+                webhooks.dispatch_event(
+                    auth_redis_client, user_id, "document.ingest_failed",
+                    {"file_name": file.filename, "category": safe_cat, "reason": "processing_error"},
+                )
 
         background_tasks.add_task(_process)
 

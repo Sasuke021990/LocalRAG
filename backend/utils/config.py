@@ -66,6 +66,10 @@ class Config:
     GOOGLE_CLIENT_SECRET: str = os.getenv('GOOGLE_CLIENT_SECRET', '')
     GOOGLE_REDIRECT_URI: str = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:3000/api/auth/google/callback')
 
+    # === Webhook Delivery Configuration ===
+    WEBHOOK_MAX_RETRIES: int = int(os.getenv('WEBHOOK_MAX_RETRIES', 3))
+    WEBHOOK_TIMEOUT_SECONDS: int = int(os.getenv('WEBHOOK_TIMEOUT_SECONDS', 5))
+
     # === SMTP Configuration (password reset email) ===
     SMTP_HOST: str = os.getenv('SMTP_HOST', '')
     SMTP_PORT: int = int(os.getenv('SMTP_PORT', 587))
