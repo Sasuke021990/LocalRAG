@@ -75,27 +75,54 @@ class TestParsers:
 
 
 class TestStorageRoundTrip:
+    USER_A = "user-aaa"
+    USER_B = "user-bbb"
+
     def test_store_list_delete(self, pipeline, redis_client):
         chunks = ["chunk one", "chunk two"]
         embeddings = [[0.1, 0.2], [0.3, 0.4]]
 
-        pipeline._store_in_redis("/tmp/report.pdf", chunks, embeddings, category="Finance")
+        pipeline._store_in_redis("/tmp/report.pdf", chunks, embeddings, "Finance", self.USER_A)
 
-        docs = pipeline.list_documents()
+        docs = pipeline.list_documents(self.USER_A)
         assert len(docs) == 1
         assert docs[0]["file_name"] == "report.pdf"
         assert docs[0]["category"] == "Finance"
         assert docs[0]["chunk_count"] == 2
 
-        assert pipeline.delete_document("report.pdf", "Finance") is True
-        assert pipeline.list_documents() == []
+        freed = pipeline.delete_document("report.pdf", "Finance", self.USER_A)
+        assert freed is not None
+        assert pipeline.list_documents(self.USER_A) == []
+
+    def test_delete_nonexistent_document_returns_none(self, pipeline):
+        assert pipeline.delete_document("ghost.pdf", "General", self.USER_A) is None
+
+    def test_list_documents_scoped_to_user(self, pipeline, redis_client):
+        pipeline._store_in_redis("/tmp/mine.pdf", ["a"], [[0.1, 0.2]], "General", self.USER_A)
+        pipeline._store_in_redis("/tmp/theirs.pdf", ["b"], [[0.3, 0.4]], "General", self.USER_B)
+
+        a_docs = pipeline.list_documents(self.USER_A)
+        b_docs = pipeline.list_documents(self.USER_B)
+
+        assert [d["file_name"] for d in a_docs] == ["mine.pdf"]
+        assert [d["file_name"] for d in b_docs] == ["theirs.pdf"]
+
+    def test_delete_only_affects_owning_user(self, pipeline, redis_client):
+        pipeline._store_in_redis("/tmp/mine.pdf", ["a"], [[0.1, 0.2]], "General", self.USER_A)
+        pipeline._store_in_redis("/tmp/theirs.pdf", ["b"], [[0.3, 0.4]], "General", self.USER_B)
+
+        pipeline.delete_document("mine.pdf", "General", self.USER_A)
+
+        assert pipeline.list_documents(self.USER_A) == []
+        assert [d["file_name"] for d in pipeline.list_documents(self.USER_B)] == ["theirs.pdf"]
 
     def test_reindex_from_disk_restores_document(self, pipeline, tmp_path):
-        category_dir = tmp_path / "General"
-        category_dir.mkdir()
+        category_dir = tmp_path / self.USER_A / "General"
+        category_dir.mkdir(parents=True)
         backup = {
             "file_name": "notes.txt",
             "category": "General",
+            "user_id": self.USER_A,
             "chunks": ["a chunk of text"],
             "embeddings": [[0.1] * 384],
             "chunk_count": 1,
@@ -106,7 +133,7 @@ class TestStorageRoundTrip:
         count = pipeline.reindex_from_disk(str(tmp_path))
 
         assert count == 1
-        docs = pipeline.list_documents()
+        docs = pipeline.list_documents(self.USER_A)
         assert len(docs) == 1
         assert docs[0]["file_name"] == "notes.txt"
 

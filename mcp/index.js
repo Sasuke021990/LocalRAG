@@ -6,15 +6,18 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import axios from "axios";
 
-// Default to the docker-compose backend endpoint if not specified
-const API_URL = process.env.LOCALRAG_API_URL || "http://127.0.0.1:8000";
-// Required only if the backend has API_KEY set (auth disabled by default)
-const API_KEY = process.env.LOCALRAG_API_KEY || "";
+// Base URL of the Vaultly backend (hosted or self-hosted).
+const API_URL =
+  process.env.VAULTLY_API_URL || process.env.LOCALRAG_API_URL || "http://127.0.0.1:8000";
+// Per-user API token minted in the Vaultly dashboard (Settings → API tokens).
+// Sent as `Authorization: Bearer <token>`. Required now that every route is
+// account-scoped. (LOCALRAG_API_KEY kept as a fallback name for older configs.)
+const API_TOKEN = process.env.VAULTLY_MCP_TOKEN || process.env.LOCALRAG_API_KEY || "";
 
 const server = new Server(
   {
-    name: "localrag-mcp",
-    version: "1.0.0",
+    name: "vaultly-mcp",
+    version: "2.0.0",
   },
   {
     capabilities: {
@@ -29,7 +32,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "query_localrag",
-        description: "Searches the LocalRAG knowledge base and returns an AI-synthesized answer with source citations. Use this whenever the user asks about local documents, internal knowledge, or specific context from their files.",
+        description: "Searches your Vaultly knowledge base and returns the most relevant passages from your own documents with source citations. Use this whenever the user asks about their documents, internal knowledge, or specific context from their files.",
         inputSchema: {
           type: "object",
           properties: {
@@ -67,11 +70,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         top_k,
         rerank_top_k
       }, {
-        headers: API_KEY ? { "x-api-key": API_KEY } : {},
+        headers: API_TOKEN ? { "Authorization": `Bearer ${API_TOKEN}` } : {},
       });
 
       const data = response.data;
-      let outputText = `## LocalRAG Answer\n${data.answer}\n\n## Sources\n`;
+      let outputText = `## Vaultly Answer\n${data.answer}\n\n## Sources\n`;
       
       if (data.sources && data.sources.length > 0) {
         data.sources.forEach((source, index) => {
@@ -115,7 +118,7 @@ Error message: ${error.message}`,
 async function run() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("LocalRAG MCP Server running on stdio");
+  console.error("Vaultly MCP Server running on stdio");
 }
 
 run().catch(console.error);

@@ -1,17 +1,18 @@
-# LocalRAG MCP Server
+# Vaultly MCP Server
 
-This is a Model Context Protocol (MCP) server that exposes your LocalRAG knowledge base to other AI agents and IDEs.
+This is a Model Context Protocol (MCP) server that exposes your Vaultly knowledge base to other AI agents and IDEs — while keeping retrieval strictly scoped to **your own** documents.
 
 ## How it works
-This server exposes exactly one tool: `query_localrag`. 
-When an AI agent (like Claude Desktop or Cursor) decides it needs to search your files, it will call this tool. The tool makes an HTTP request to your running LocalRAG docker backend (`http://localhost:8000/query`) and formats the AI-generated answer and file citations back into text for the agent to read.
+This server exposes exactly one tool: `query_localrag`.
+When an AI agent (like Claude Desktop or Cursor) decides it needs to search your files, it will call this tool. The tool makes an authenticated HTTP request to your Vaultly backend (`/query`) using your personal API token, and formats the ranked passages and file citations back into text for the agent to read. Because the request is authenticated as you, only your documents are searched — never any other user's.
 
 ## Prerequisites
-1. Ensure your LocalRAG docker containers are running (`docker-compose up -d`).
-2. Ensure you have Node.js installed on your host machine.
-3. Install dependencies in this directory:
+1. A running Vaultly backend — the hosted service, or your own `docker-compose up -d` stack.
+2. A **personal API token**. Sign in to the Vaultly dashboard and create one under **Settings → API tokens**. The token is shown once — copy it immediately.
+3. Node.js installed on your host machine.
+4. Install dependencies in this directory:
    ```bash
-   cd "f:\Projects\VS Code\LocalRAG\mcp"
+   cd mcp
    npm install
    ```
 
@@ -21,8 +22,10 @@ Set these environment variables before starting the server (e.g. in your MCP cli
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `LOCALRAG_API_URL` | `http://127.0.0.1:8000` | Base URL of the running LocalRAG backend |
-| `LOCALRAG_API_KEY` | *(unset)* | Sent as the `x-api-key` header. Only required if the backend has `API_KEY` set (auth is disabled by default) |
+| `VAULTLY_API_URL` | `http://127.0.0.1:8000` | Base URL of your Vaultly backend (use your hosted URL here) |
+| `VAULTLY_MCP_TOKEN` | *(unset)* | Your personal API token (`vlt_…`), sent as `Authorization: Bearer <token>`. **Required** — every route is account-scoped. Revoke it any time in the dashboard. |
+
+> The older `LOCALRAG_API_URL` / `LOCALRAG_API_KEY` names are still accepted as fallbacks, but the `x-api-key` scheme they used no longer exists — set `VAULTLY_MCP_TOKEN` to a real token.
 
 ## Connecting to AI Clients
 
@@ -43,11 +46,15 @@ To connect the official Claude Desktop app:
    ```json
    {
      "mcpServers": {
-       "localrag": {
+       "vaultly": {
          "command": "node",
          "args": [
-           "f:\\Projects\\VS Code\\LocalRAG\\mcp\\index.js"
-         ]
+           "/absolute/path/to/mcp/index.js"
+         ],
+         "env": {
+           "VAULTLY_API_URL": "https://your-vaultly-host",
+           "VAULTLY_MCP_TOKEN": "vlt_your_token_here"
+         }
        }
      }
    }

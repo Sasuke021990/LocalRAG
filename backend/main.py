@@ -19,17 +19,23 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from auth import routes as auth_routes
+from auth.dependencies import require_current_user
+from auth.redis_client import redis_client as auth_redis_client
+from integrations import routes as integrations_routes
+from integrations import webhooks
 from ingestion.pipeline import DocumentIngestionPipeline
 from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker
 from retrieval.semantic_cache import SemanticCache
+from utils import quota
 from utils.config import config
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -48,7 +54,7 @@ app = FastAPI(
         "cross-encoder re-ranking, semantic caching, and category-aware "
         "document management.\n\n"
         "All processed data is stored in Redis (fast retrieval) **and** as "
-        "portable JSON backups under `/app/data/<category>/` (durability)."
+        "portable JSON backups under `/app/data/<user_id>/<category>/` (durability)."
     ),
     version="2.0.0",
     docs_url="/docs",
@@ -63,15 +69,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-async def require_api_key(x_api_key: Optional[str] = Header(None)) -> None:
-    """
-    Guard dependency applied to every route except GET / and GET /health.
-    A no-op when API_KEY is unset (default), preserving the app's
-    zero-friction local-only behavior.
-    """
-    if config.API_KEY and x_api_key != config.API_KEY:
-        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+app.include_router(auth_routes.router, prefix="/auth", tags=["Auth"])
+app.include_router(integrations_routes.router, prefix="/integrations", tags=["Integrations"])
 
 
 # ─── Component initialisation ─────────────────────────────────────────────────
@@ -148,36 +147,34 @@ async def health_check():
 
 # ─── Categories ───────────────────────────────────────────────────────────────
 
-@app.get("/categories", tags=["Categories"],
-         summary="List all document categories", dependencies=[Depends(require_api_key)])
-async def list_categories():
+@app.get("/categories", tags=["Categories"], summary="List all document categories")
+async def list_categories(user_id: str = Depends(require_current_user)):
     """
-    Returns the names of all category folders that exist under ``/app/data/``.
-    Categories are created automatically when a document is uploaded, or
-    explicitly via ``POST /categories``.
+    Returns the names of all category folders that exist under this user's
+    own ``/app/data/<user_id>/`` namespace. Categories are created
+    automatically when a document is uploaded, or explicitly via
+    ``POST /categories``.
     """
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        categories = sorted(d.name for d in DATA_DIR.iterdir() if d.is_dir())
+        user_dir = DATA_DIR / user_id
+        user_dir.mkdir(parents=True, exist_ok=True)
+        categories = sorted(d.name for d in user_dir.iterdir() if d.is_dir())
         return {"categories": categories, "total": len(categories)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/categories", tags=["Categories"],
-          summary="Create a new category", dependencies=[Depends(require_api_key)])
-async def create_category(request: CategoryCreate):
+@app.post("/categories", tags=["Categories"], summary="Create a new category")
+async def create_category(request: CategoryCreate, user_id: str = Depends(require_current_user)):
     """
-    Creates a new category folder under ``/app/data/<name>/``.
-    The folder is also immediately visible on the Docker-mapped host path
-    (``KNOWLEDGE_DATA_PATH`` from ``.env``) at ``<KNOWLEDGE_DATA_PATH>/<name>/``.
+    Creates a new category folder under ``/app/data/<user_id>/<name>/``.
     """
     try:
         # Sanitise name — prevent path traversal
         name = request.name.strip().replace("/", "_").replace("\\", "_").replace("..", "_")
         if not name:
             raise HTTPException(status_code=400, detail="Category name cannot be empty")
-        category_dir = DATA_DIR / name
+        category_dir = DATA_DIR / user_id / name
         category_dir.mkdir(parents=True, exist_ok=True)
         return {"status": "created", "category": name}
     except HTTPException:
@@ -188,32 +185,43 @@ async def create_category(request: CategoryCreate):
 
 # ─── Documents ────────────────────────────────────────────────────────────────
 
-@app.get("/documents", tags=["Documents"],
-         summary="List all indexed documents", dependencies=[Depends(require_api_key)])
-async def list_documents():
+@app.get("/documents", tags=["Documents"], summary="List all indexed documents")
+async def list_documents(user_id: str = Depends(require_current_user)):
     """
-    Returns metadata for every document currently indexed in Redis.
+    Returns metadata for every document this user has indexed in Redis.
     Includes file name, category, chunk count, and processing timestamp.
     """
     try:
-        docs = ingestion_pipeline.list_documents()
+        docs = ingestion_pipeline.list_documents(user_id)
         return {"documents": docs, "total": len(docs)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.delete("/documents/{file_name}", tags=["Documents"],
-            summary="Delete a document", dependencies=[Depends(require_api_key)])
-async def delete_document(file_name: str, category: str = "General"):
+@app.delete("/documents/{file_name}", tags=["Documents"], summary="Delete a document")
+async def delete_document(
+    file_name: str,
+    background_tasks: BackgroundTasks,
+    category: str = "General",
+    user_id: str = Depends(require_current_user),
+):
     """
     Removes the document from Redis **and** deletes its JSON backup from disk.
     Pass ``?category=<name>`` to identify the correct document when the same
     file name exists in multiple categories.
     """
     try:
-        success = ingestion_pipeline.delete_document(file_name, category)
-        if not success:
+        freed_bytes = ingestion_pipeline.delete_document(file_name, category, user_id)
+        if freed_bytes is None:
             raise HTTPException(status_code=404, detail="Document not found")
+        quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed_bytes)
+        background_tasks.add_task(
+            webhooks.dispatch_event,
+            auth_redis_client,
+            user_id,
+            "document.deleted",
+            {"file_name": file_name, "category": category},
+        )
         return {"status": "deleted", "file_name": file_name, "category": category}
     except HTTPException:
         raise
@@ -223,22 +231,22 @@ async def delete_document(file_name: str, category: str = "General"):
 
 # ─── Upload ───────────────────────────────────────────────────────────────────
 
-@app.post("/upload", tags=["Documents"],
-          summary="Upload and ingest a document", dependencies=[Depends(require_api_key)])
+@app.post("/upload", tags=["Documents"], summary="Upload and ingest a document")
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Document file to ingest"),
     chunk_size: int = Form(512, description="Characters per chunk"),
     chunk_overlap: int = Form(50, description="Overlap between chunks"),
     category: str = Form("General", description="Destination category"),
+    user_id: str = Depends(require_current_user),
 ):
     """
     Upload a document for ingestion.
 
     **Flow**:
-    1. File is validated and saved to ``/app/data/<category>/<filename>``
+    1. File is validated and saved to ``/app/data/<user_id>/<category>/<filename>``
     2. Background task: parse → chunk → embed → store → delete original
-    3. JSON backup written to ``/app/data/<category>/<stem>.json``
+    3. JSON backup written to ``/app/data/<user_id>/<category>/<stem>.json``
     4. The original uploaded file is deleted after ingestion
 
     Supported formats: ``.pdf``, ``.docx``, ``.txt``, ``.csv``, ``.md``,
@@ -256,12 +264,21 @@ async def upload_document(
         # Sanitise category
         safe_cat = category.strip().replace("/", "_").replace("\\", "_").replace("..", "_") or "General"
 
+        content = await file.read()
+
+        # Cheap pre-check using the raw upload size as an upper-bound
+        # heuristic -- rejects obviously-over-quota uploads immediately,
+        # before any file is written or processing is queued. The
+        # authoritative check (using the actual post-ingestion stored
+        # size) happens in _process() below, since embedding overhead
+        # isn't known until after processing.
+        quota.check_upload_allowed(ingestion_pipeline.redis_client, user_id, len(content))
+
         # Ensure directory exists and save file
-        category_dir = DATA_DIR / safe_cat
+        category_dir = DATA_DIR / user_id / safe_cat
         category_dir.mkdir(parents=True, exist_ok=True)
         file_path = str(category_dir / file.filename)
 
-        content = await file.read()
         with open(file_path, "wb") as fh:
             fh.write(content)
 
@@ -273,13 +290,36 @@ async def upload_document(
             try:
                 result = ingestion_pipeline.process_document(
                     file_path,
+                    user_id=user_id,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                     category=safe_cat,
                 )
                 logger.info(f"Processed: {file.filename} → {safe_cat} | {result['total_chunks']} chunks")
+
+                quota.record_ingested_document(ingestion_pipeline.redis_client, user_id, result["stored_bytes"])
+                if quota.is_over_quota(ingestion_pipeline.redis_client, user_id):
+                    freed = ingestion_pipeline.delete_document(file.filename, safe_cat, user_id)
+                    if freed is not None:
+                        quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed)
+                    logger.warning(
+                        f"Rolled back '{file.filename}' for user {user_id}: quota exceeded after ingestion"
+                    )
+                    webhooks.dispatch_event(
+                        auth_redis_client, user_id, "document.ingest_failed",
+                        {"file_name": file.filename, "category": safe_cat, "reason": "quota_exceeded"},
+                    )
+                else:
+                    webhooks.dispatch_event(
+                        auth_redis_client, user_id, "document.ingested",
+                        {"file_name": file.filename, "category": safe_cat, "chunk_count": result["total_chunks"]},
+                    )
             except Exception as exc:
                 logger.error(f"Background processing failed for '{file.filename}': {exc}")
+                webhooks.dispatch_event(
+                    auth_redis_client, user_id, "document.ingest_failed",
+                    {"file_name": file.filename, "category": safe_cat, "reason": "processing_error"},
+                )
 
         background_tasks.add_task(_process)
 
@@ -299,9 +339,8 @@ async def upload_document(
 
 # ─── Query ────────────────────────────────────────────────────────────────────
 
-@app.post("/query", response_model=QueryResponse, tags=["Search"],
-          summary="Hybrid search + re-rank + cache", dependencies=[Depends(require_api_key)])
-async def query_documents(request: QueryRequest):
+@app.post("/query", response_model=QueryResponse, tags=["Search"], summary="Hybrid search + re-rank + cache")
+async def query_documents(request: QueryRequest, user_id: str = Depends(require_current_user)):
     """
     Query the knowledge base using the full RAG pipeline:
 
@@ -315,7 +354,7 @@ async def query_documents(request: QueryRequest):
         start = asyncio.get_event_loop().time()
 
         # 1. Cache check
-        cached = semantic_cache.get_cached_result(request.query)
+        cached = semantic_cache.get_cached_result(user_id, request.query)
         if cached and cached.results:
             return QueryResponse(
                 answer=cached.results[0]["answer"],
@@ -325,7 +364,7 @@ async def query_documents(request: QueryRequest):
 
         # 2. Hybrid search
         logger.info(f"Hybrid search: '{request.query}'")
-        results = hybrid_search.search(query=request.query, top_k=request.top_k)
+        results = hybrid_search.search(user_id, query=request.query, top_k=request.top_k)
 
         # 3. Re-rank
         if request.rerank_top_k > 0:
@@ -370,7 +409,7 @@ async def query_documents(request: QueryRequest):
         processing_time = asyncio.get_event_loop().time() - start
 
         # 5. Cache result
-        semantic_cache.set_cached_result(request.query, [{"answer": answer, "sources": sources}])
+        semantic_cache.set_cached_result(user_id, request.query, [{"answer": answer, "sources": sources}])
 
         return QueryResponse(answer=answer, sources=sources, processing_time=processing_time)
 
@@ -381,9 +420,8 @@ async def query_documents(request: QueryRequest):
 
 # ─── SSE progress stream ──────────────────────────────────────────────────────
 
-@app.get("/progress/{task_id}", tags=["System"],
-         summary="SSE progress stream for a background task", dependencies=[Depends(require_api_key)])
-async def stream_progress(task_id: str):
+@app.get("/progress/{task_id}", tags=["System"], summary="SSE progress stream for a background task")
+async def stream_progress(task_id: str, user_id: str = Depends(require_current_user)):
     """
     Server-Sent Events endpoint that streams progress updates (0–100 %)
     for a background ingestion task.

@@ -1,7 +1,7 @@
 {
-  "name": "localrag-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for querying LocalRAG",
+  "name": "vaultly-mcp",
+  "version": "2.0.0",
+  "description": "MCP server for querying your Vaultly knowledge base",
   "main": "index.js",
   "type": "module",
   "scripts": {

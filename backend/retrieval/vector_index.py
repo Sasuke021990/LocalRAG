@@ -31,9 +31,9 @@ CHUNK_KEY_PREFIX = "chunk:"
 EMBEDDING_DIM = 384
 
 
-def chunk_key(category: str, file_name: str, chunk_index: int) -> str:
+def chunk_key(user_id: str, category: str, file_name: str, chunk_index: int) -> str:
     """Deterministic key for one chunk — no KEYS/SCAN needed to delete it later."""
-    return f"{CHUNK_KEY_PREFIX}{category}:{file_name}:{chunk_index}"
+    return f"{CHUNK_KEY_PREFIX}{user_id}:{category}:{file_name}:{chunk_index}"
 
 
 def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
@@ -52,6 +52,7 @@ def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
 
     schema = (
         TextField("content"),
+        TagField("user_id"),
         TagField("file_name"),
         TagField("category"),
         NumericField("chunk_index"),
@@ -78,6 +79,7 @@ def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
 
 def index_chunk(
     redis_client: Redis,
+    user_id: str,
     category: str,
     file_name: str,
     chunk_index: int,
@@ -85,12 +87,13 @@ def index_chunk(
     embedding: List[float],
 ) -> None:
     """Write/overwrite one chunk HASH. Idempotent — safe to call repeatedly (e.g. on reindex)."""
-    key = chunk_key(category, file_name, chunk_index)
+    key = chunk_key(user_id, category, file_name, chunk_index)
     vector_bytes = np.array(embedding, dtype=np.float32).tobytes()
     redis_client.hset(
         key,
         mapping={
             "content": content,
+            "user_id": user_id,
             "file_name": file_name,
             "category": category,
             "chunk_index": chunk_index,
@@ -99,24 +102,29 @@ def index_chunk(
     )
 
 
-def delete_chunks(redis_client: Redis, category: str, file_name: str, chunk_count: int) -> None:
+def delete_chunks(redis_client: Redis, user_id: str, category: str, file_name: str, chunk_count: int) -> None:
     """Delete all chunk HASHes for a document by reconstructing their deterministic keys."""
     if chunk_count <= 0:
         return
-    keys = [chunk_key(category, file_name, i) for i in range(chunk_count)]
+    keys = [chunk_key(user_id, category, file_name, i) for i in range(chunk_count)]
     redis_client.delete(*keys)
 
 
-def knn_search(redis_client: Redis, query_embedding: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
+def knn_search(redis_client: Redis, user_id: str, query_embedding: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
     """
-    Run a RediSearch KNN vector query and return chunk hits sorted by
-    similarity (highest first). Returns ``[]`` on any failure (e.g. index
-    not yet created, no chunks indexed) rather than raising, matching the
-    fail-soft convention used elsewhere in the retrieval layer.
+    Run a RediSearch KNN vector query pre-filtered to one user's chunks
+    (``@user_id:{<uid>}``) and return hits sorted by similarity (highest
+    first). Returns ``[]`` on any failure (e.g. index not yet created, no
+    chunks indexed) rather than raising, matching the fail-soft convention
+    used elsewhere in the retrieval layer.
+
+    The TAG filter is a pre-filter on the KNN clause itself, not a
+    post-filter — RediSearch never considers another user's vectors as
+    KNN candidates, so this is a hard isolation boundary, not a courtesy.
     """
     vector_bytes = np.array(query_embedding, dtype=np.float32).tobytes()
     query = (
-        Query(f"*=>[KNN {top_k} @embedding $vec AS score]")
+        Query(f"(@user_id:{{{user_id}}})=>[KNN {top_k} @embedding $vec AS score]")
         .sort_by("score")
         .return_fields("content", "file_name", "category", "chunk_index", "score")
         .dialect(2)

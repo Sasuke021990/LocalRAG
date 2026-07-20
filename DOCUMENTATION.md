@@ -200,6 +200,44 @@ If no category is specified, documents go to General.
 
 Full interactive docs at: http://localhost:8000/docs
 
+Every route below except `GET /`, `GET /health`, and `POST /auth/*` requires
+a signed-in session — an httpOnly cookie (set automatically for web
+clients) or an `Authorization: Bearer <token>` header (mobile/API
+clients). See section 10 for `JWT_SECRET`.
+
+### POST /auth/signup
+Create an account. Body: {"email": "you@example.com", "password": "at least 8 chars"}
+Response: {"user_id", "email", "storage_used_bytes", "storage_quota_bytes", "session_token"}
+Also sets the session cookie.
+
+### POST /auth/login
+Body: {"email", "password"}. Same response shape as signup.
+
+### POST /auth/logout
+No body required. Clears the session cookie. Response: {"status": "logged_out"}
+
+### GET /auth/me
+Requires a session. Response: {"user_id", "email", "storage_used_bytes", "storage_quota_bytes"}
+
+### GET /auth/google/login
+Redirects to Google's consent screen. Requires `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` configured.
+
+### GET /auth/google/callback?code=...
+Google redirects here after consent. Exchanges the code for the user's Google identity,
+finds-or-creates a Vaultly account (linking by email if a password-based account already
+exists with the same address), sets the session cookie, and redirects to `FRONTEND_BASE_URL`.
+
+### POST /auth/password-reset/request
+Body: {"email"}. Always returns `{"status": "ok"}` regardless of whether the email is
+registered (never leaks account existence). If it is, sends a reset link via SMTP
+(requires `SMTP_HOST` configured; silently no-ops otherwise).
+
+### POST /auth/password-reset/confirm
+Body: {"token", "new_password"}. Sets the new password and invalidates every existing
+session for that account (including a possibly-hijacked one -- exactly the scenario a
+reset is meant to recover from). Response: {"status": "password_updated"}. 400 if the
+token is invalid or has expired (tokens are single-use, 1-hour TTL).
+
 ### GET /
 Returns API version and status.
 Response: {"message": "LocalRAG API v2.0 is running", "version": "2.0.0"}
@@ -271,6 +309,71 @@ If query was found in semantic cache, processing_time will be 0.0.
 
 ### GET /progress/{task_id}
 Server-Sent Events stream for background task progress.
+
+---
+
+## 6a. Integrations API (MCP/API tokens + webhooks)
+
+These routes let a user connect external AI tools and receive event
+notifications. All `POST /integrations/*` and management routes require a
+**logged-in session** — an MCP/API token is deliberately **not** accepted
+here (it can read/write your data, but it cannot mint more tokens or
+register webhooks). Data routes like `/query` accept either a session or a
+token.
+
+### API tokens
+
+A token is an opaque, revocable credential (`vlt_…`) you paste into an MCP
+client or API caller. It authenticates as you, so `/query`, `/documents`,
+`/upload`, etc. all work with an `Authorization: Bearer vlt_…` header.
+Only a SHA-256 hash is stored; the plaintext is shown **once**.
+
+- **POST /integrations/tokens** — Body: `{"name": "my-laptop"}`. Response:
+  `{"token_id", "name", "token": "vlt_…", "prefix", "created_at"}`. The
+  `token` field is the only time you'll see the secret — copy it now.
+- **GET /integrations/tokens** — `{"tokens": [{"token_id", "name",
+  "prefix", "created_at", "last_used_at"}], "total"}`. Never returns the
+  secret.
+- **DELETE /integrations/tokens/{token_id}** — Revoke immediately.
+  `{"status": "revoked", "token_id"}`.
+
+### Webhooks
+
+Register HTTP endpoints Vaultly POSTs to on document lifecycle events.
+Payloads carry **metadata only** (never document content).
+
+Supported events: `document.ingested`, `document.deleted`,
+`document.ingest_failed`.
+
+- **POST /integrations/webhooks** — Body: `{"url": "https://…",
+  "events": ["document.ingested"], "secret": "optional"}`. A signing
+  secret is generated if omitted and returned in the response so you can
+  verify deliveries.
+- **GET /integrations/webhooks** — List your webhooks (with delivery
+  stats: `last_status`, `last_delivered_at`, `failure_count`).
+- **DELETE /integrations/webhooks/{webhook_id}** — Remove it.
+- **POST /integrations/webhooks/{webhook_id}/test** — Send a `ping` event
+  to verify connectivity.
+
+**Delivery format.** Each delivery is a POST with JSON body
+`{"event", "timestamp", "data": {…}}` and headers:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Vaultly-Event` | The event type (or `ping` for a test) |
+| `X-Vaultly-Delivery` | Unique delivery id |
+| `X-Vaultly-Signature` | `sha256=<hmac>` of the exact body, keyed by your webhook secret |
+
+**Verifying the signature** (Python):
+
+```python
+import hmac, hashlib
+expected = "sha256=" + hmac.new(secret.encode(), request.body, hashlib.sha256).hexdigest()
+assert hmac.compare_digest(expected, request.headers["X-Vaultly-Signature"])
+```
+
+Delivery is best-effort with up to `WEBHOOK_MAX_RETRIES` attempts and a
+`WEBHOOK_TIMEOUT_SECONDS` per-attempt timeout (see section 10).
 
 ---
 
@@ -370,9 +473,18 @@ Set these in `.env` (copy from `.env.example`) — `docker-compose.yml` reads th
 | REDIS_DB   | 0    | Redis database |
 | KNOWLEDGE_DATA_PATH | ./data | Host directory mounted at /app/data |
 | REDIS_DATA_PATH | (named volume) | Host directory mounted at /data (TrueNAS compose only) |
-| API_KEY | (unset) | If set, required as the `x-api-key` header on every route except GET / and GET /health |
+| JWT_SECRET | (required) | Signs account session tokens (`openssl rand -hex 32`) — app refuses to start without it |
+| SESSION_COOKIE_MAX_AGE_SECONDS | 604800 (7 days) | Session lifetime |
+| DEFAULT_STORAGE_QUOTA_BYTES | 1073741824 (1 GiB) | Default per-account storage quota |
+| FRONTEND_BASE_URL | http://localhost:3000 | Used to build password-reset links and the post-OAuth-login redirect |
+| GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET | (unset) | Optional — enables "Sign in with Google" when both are set |
+| GOOGLE_REDIRECT_URI | http://localhost:3000/api/auth/google/callback | Must match the redirect URI registered in the Google Cloud Console |
+| SMTP_HOST / SMTP_USER / SMTP_PASSWORD | (unset) | Optional — enables password-reset emails when SMTP_HOST is set |
+| SMTP_PORT / SMTP_FROM / SMTP_USE_TLS | 587 / noreply@vaultly.local / True | SMTP delivery settings |
 | CORS_ALLOWED_ORIGINS | http://localhost:3000 | Comma-separated list of allowed CORS origins |
 | SEMANTIC_CACHE_SIMILARITY_THRESHOLD | 0.92 | Minimum cosine similarity for a semantic cache hit |
+| WEBHOOK_MAX_RETRIES | 3 | Delivery attempts per webhook event before giving up |
+| WEBHOOK_TIMEOUT_SECONDS | 5 | Per-attempt HTTP timeout for webhook delivery |
 
 ### Embedding Model
 Default: all-MiniLM-L6-v2 (384-dim, ~80MB, fast)

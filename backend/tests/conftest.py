@@ -119,6 +119,93 @@ def redisearch_vector_available():
 
 
 @pytest.fixture
+def auth_client(redis_client):
+    """
+    A TestClient for a minimal app mounting only the real auth router +
+    a /protected probe route -- exercises the actual production
+    auth.routes/auth.dependencies code without needing main.py's heavy
+    ML components (which require RediSearch VECTOR field support just to
+    construct, unrelated to anything auth does). Lets auth-only tests
+    run in any environment with a plain Redis, not just one with
+    redis-stack.
+
+    auth.redis_client's module-level client and this fixture's
+    redis_client both connect using the same REDIS_HOST/REDIS_PORT env
+    vars, so they're already the same Redis server/db -- no connection
+    wiring needed, just make sure auth.redis_client is imported (and
+    therefore connected) after the env vars this module reads are set,
+    which conftest.py's REDIS_HOST/REDIS_PORT module-level constants
+    already guarantee.
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from auth import routes as auth_routes
+    from auth.dependencies import require_current_user
+
+    app = FastAPI()
+    app.include_router(auth_routes.router, prefix="/auth")
+
+    @app.get("/protected")
+    async def _protected(user_id: str = Depends(require_current_user)):
+        return {"user_id": user_id}
+
+    return TestClient(app)
+
+
+@pytest.fixture
+def api_client(redis_client):
+    """
+    A TestClient mounting the real auth + integrations routers plus a
+    /probe route guarded by require_current_user -- same rationale as
+    ``auth_client`` (avoids main.py's RediSearch-dependent component
+    init). Used by the integrations HTTP tests to exercise token/webhook
+    management (session-only) and to prove an MCP token can reach a
+    require_current_user route but not a require_session_user one.
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from auth import routes as auth_routes
+    from auth.dependencies import require_current_user
+    from integrations import routes as integrations_routes
+
+    app = FastAPI()
+    app.include_router(auth_routes.router, prefix="/auth")
+    app.include_router(integrations_routes.router, prefix="/integrations")
+
+    @app.get("/probe")
+    async def _probe(user_id: str = Depends(require_current_user)):
+        return {"user_id": user_id}
+
+    return TestClient(app)
+
+
+@pytest.fixture
+def test_user(redis_client):
+    """A real user row in Redis, for tests that need a valid user_id without going through HTTP signup."""
+    from auth import passwords, store
+
+    return store.create_user(
+        redis_client,
+        email="test@example.com",
+        password_hash=passwords.hash_password("testpassword123"),
+    )
+
+
+@pytest.fixture
+def second_test_user(redis_client):
+    """A second, distinct user row -- for cross-user isolation tests alongside test_user."""
+    from auth import passwords, store
+
+    return store.create_user(
+        redis_client,
+        email="test2@example.com",
+        password_hash=passwords.hash_password("testpassword123"),
+    )
+
+
+@pytest.fixture
 def no_vector_index(monkeypatch):
     """
     Stub out retrieval.vector_index's Redis-writing calls as no-ops.

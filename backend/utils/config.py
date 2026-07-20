@@ -47,15 +47,36 @@ class Config:
     USE_ROCM: bool = os.getenv('USE_ROCM', 'True').lower() == 'true'
 
     # === Security Configuration ===
-    # Unset (default) = auth disabled, matching today's zero-friction local
-    # deployment. Set API_KEY to require an `x-api-key` header on every
-    # route except GET / and GET /health.
-    API_KEY: Optional[str] = os.getenv('API_KEY') or None
     CORS_ALLOWED_ORIGINS_LIST: list = [
         origin.strip()
         for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
         if origin.strip()
     ]
+
+    # === Auth / Session Configuration (Vaultly multi-user) ===
+    # No default — a missing secret at import time is a startup-time bug,
+    # not a runtime surprise. Generate with e.g. `openssl rand -hex 32`.
+    JWT_SECRET: str = os.getenv('JWT_SECRET', '')
+    SESSION_COOKIE_MAX_AGE_SECONDS: int = int(os.getenv('SESSION_COOKIE_MAX_AGE_SECONDS', 7 * 24 * 3600))
+    DEFAULT_STORAGE_QUOTA_BYTES: int = int(os.getenv('DEFAULT_STORAGE_QUOTA_BYTES', 1024 ** 3))
+    FRONTEND_BASE_URL: str = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000')
+
+    # === Google OAuth Configuration ===
+    GOOGLE_CLIENT_ID: str = os.getenv('GOOGLE_CLIENT_ID', '')
+    GOOGLE_CLIENT_SECRET: str = os.getenv('GOOGLE_CLIENT_SECRET', '')
+    GOOGLE_REDIRECT_URI: str = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:3000/api/auth/google/callback')
+
+    # === Webhook Delivery Configuration ===
+    WEBHOOK_MAX_RETRIES: int = int(os.getenv('WEBHOOK_MAX_RETRIES', 3))
+    WEBHOOK_TIMEOUT_SECONDS: int = int(os.getenv('WEBHOOK_TIMEOUT_SECONDS', 5))
+
+    # === SMTP Configuration (password reset email) ===
+    SMTP_HOST: str = os.getenv('SMTP_HOST', '')
+    SMTP_PORT: int = int(os.getenv('SMTP_PORT', 587))
+    SMTP_USER: str = os.getenv('SMTP_USER', '')
+    SMTP_PASSWORD: str = os.getenv('SMTP_PASSWORD', '')
+    SMTP_FROM: str = os.getenv('SMTP_FROM', 'noreply@vaultly.local')
+    SMTP_USE_TLS: bool = os.getenv('SMTP_USE_TLS', 'True').lower() == 'true'
 
     @classmethod
     def validate(cls):
@@ -70,11 +91,10 @@ class Config:
             raise ValueError("REDIS_PORT must be between 1 and 65535")
         if cls.APP_PORT <= 0 or cls.APP_PORT > 65535:
             raise ValueError("APP_PORT must be between 1 and 65535")
-        if not cls.API_KEY:
-            import logging
-            logging.getLogger(__name__).warning(
-                "API_KEY is not set — all endpoints are unauthenticated. "
-                "Set API_KEY to require an x-api-key header."
+        if not cls.JWT_SECRET:
+            raise ValueError(
+                "JWT_SECRET must be set (e.g. `openssl rand -hex 32`) — required for "
+                "account sessions."
             )
 
 # Initialize and validate config

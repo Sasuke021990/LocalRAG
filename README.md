@@ -57,8 +57,9 @@ cd LocalRAG
 2. **Configure your environment**
 ```bash
 cp .env.example .env
-# Edit .env: set KNOWLEDGE_DATA_PATH to where you want document backups
-# stored (defaults to ./data), and optionally API_KEY/CORS_ALLOWED_ORIGINS.
+# Edit .env: set JWT_SECRET (required -- e.g. `openssl rand -hex 32`),
+# KNOWLEDGE_DATA_PATH for where document backups are stored (defaults to
+# ./data), and optionally CORS_ALLOWED_ORIGINS.
 ```
 
 3. **Start the application**
@@ -88,7 +89,7 @@ docker-compose up --build -d
 
 - **100% Local**: No cloud dependencies, no telemetry, no external API calls (e.g., OpenAI). Your documents never leave your machine.
 - **Auto-Cleanup**: Your original raw documents are deleted from the server the second they finish chunking and vectorizing.
-- **Optional API-key auth**: set `API_KEY` in `.env` to require an `x-api-key` header on every backend route except `GET /` and `GET /health`. Unset (default) runs with no auth, suitable for a local-only deployment.
+- **Account-based auth**: every route except `GET /`, `GET /health`, and `POST /auth/*` requires a signed-in session (`POST /auth/signup` or `POST /auth/login`), via an httpOnly cookie (web) or an `Authorization: Bearer` token (mobile/API clients). `JWT_SECRET` is required in `.env`. Multi-tenant document isolation (each account seeing only its own documents) is in progress — accounts gate access today, per-account data scoping is landing incrementally.
 
 ## 🧪 Development
 
