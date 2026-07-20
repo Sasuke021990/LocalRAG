@@ -101,8 +101,9 @@ class DocumentIngestionPipeline:
 
     def reindex_from_disk(self, data_dir: str = "/app/data") -> int:
         """
-        Scan every ``*.json`` backup under *data_dir* and restore any
-        documents missing from Redis.  Called automatically on app startup.
+        Scan every ``*.json`` backup under *data_dir* (now laid out as
+        ``<data_dir>/<user_id>/<category>/<stem>.json``) and restore any
+        documents missing from Redis. Called automatically on app startup.
 
         This is also the migration path for the RediSearch chunk vector
         index: every backup's chunks are re-written to their ``chunk:*``
@@ -120,39 +121,43 @@ class DocumentIngestionPipeline:
             return 0
 
         count = 0
-        for category_dir in data_path.iterdir():
-            if not category_dir.is_dir():
+        for user_dir in data_path.iterdir():
+            if not user_dir.is_dir():
                 continue
-            category = category_dir.name
-            for json_file in category_dir.glob("*.json"):
-                try:
-                    with open(json_file, "r", encoding="utf-8") as fh:
-                        data = json.load(fh)
+            user_id = user_dir.name
+            for category_dir in user_dir.iterdir():
+                if not category_dir.is_dir():
+                    continue
+                category = category_dir.name
+                for json_file in category_dir.glob("*.json"):
+                    try:
+                        with open(json_file, "r", encoding="utf-8") as fh:
+                            data = json.load(fh)
 
-                    file_name = data.get("file_name", json_file.stem)
-                    doc_key = f"document:{category}:{file_name}"
+                        file_name = data.get("file_name", json_file.stem)
+                        doc_key = f"document:{user_id}:{category}:{file_name}"
 
-                    if not self.redis_client.exists(doc_key):
-                        self.redis_client.set(doc_key, json.dumps(data))
-                        count += 1
-                        logger.info(f"Re-indexed: {doc_key}")
+                        if not self.redis_client.exists(doc_key):
+                            self.redis_client.set(doc_key, json.dumps(data))
+                            count += 1
+                            logger.info(f"Re-indexed: {doc_key}")
 
-                    chunks = data.get("chunks", [])
-                    embeddings = data.get("embeddings", [])
-                    for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-                        vector_index.index_chunk(
-                            self.redis_client, category, file_name, i, chunk_text, embedding
-                        )
-                except Exception as exc:
-                    logger.error(f"Error re-indexing {json_file}: {exc}")
+                        chunks = data.get("chunks", [])
+                        embeddings = data.get("embeddings", [])
+                        for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+                            vector_index.index_chunk(
+                                self.redis_client, user_id, category, file_name, i, chunk_text, embedding
+                            )
+                    except Exception as exc:
+                        logger.error(f"Error re-indexing {json_file}: {exc}")
 
         logger.info(f"Startup re-index complete — {count} document(s) restored from disk")
         return count
 
-    def list_documents(self) -> List[Dict[str, Any]]:
-        """Return metadata for every indexed document stored in Redis."""
+    def list_documents(self, user_id: str) -> List[Dict[str, Any]]:
+        """Return metadata for every document this user has indexed in Redis."""
         try:
-            keys = self.redis_client.keys("document:*")
+            keys = self.redis_client.keys(f"document:{user_id}:*")
             documents = []
             for key in keys:
                 raw = self.redis_client.get(key)
@@ -176,32 +181,37 @@ class DocumentIngestionPipeline:
             logger.error(f"Error listing documents: {exc}")
             return []
 
-    def delete_document(self, file_name: str, category: str = "General") -> bool:
+    def delete_document(self, file_name: str, category: str, user_id: str) -> Optional[int]:
         """
         Delete a document from Redis and remove its JSON backup from disk.
-        Returns True on success.
+        Returns the deleted backup's byte size (for quota accounting), or
+        ``None`` if the document didn't exist.
         """
         try:
-            doc_key = f"document:{category}:{file_name}"
+            doc_key = f"document:{user_id}:{category}:{file_name}"
 
             raw = self.redis_client.get(doc_key)
-            chunk_count = json.loads(raw).get("chunk_count", 0) if raw else 0
+            if raw is None:
+                return None
+            chunk_count = json.loads(raw).get("chunk_count", 0)
 
             self.redis_client.delete(doc_key)
-            vector_index.delete_chunks(self.redis_client, category, file_name, chunk_count)
+            vector_index.delete_chunks(self.redis_client, user_id, category, file_name, chunk_count)
             logger.info(f"Deleted from Redis: {doc_key} ({chunk_count} chunk(s))")
 
             # Remove JSON backup
             stem = Path(file_name).stem
-            json_path = Path(f"/app/data/{category}/{stem}.json")
+            json_path = Path(f"/app/data/{user_id}/{category}/{stem}.json")
+            freed_bytes = 0
             if json_path.exists():
+                freed_bytes = json_path.stat().st_size
                 json_path.unlink()
                 logger.info(f"Deleted JSON backup: {json_path}")
 
-            return True
+            return freed_bytes
         except Exception as exc:
             logger.error(f"Error deleting document '{file_name}': {exc}")
-            return False
+            return None
 
     # ─────────────────────────────────────────────────────────────────────────
     # Main ingestion method
@@ -210,6 +220,7 @@ class DocumentIngestionPipeline:
     def process_document(
         self,
         file_path: str,
+        user_id: str,
         chunk_size: int = 512,
         chunk_overlap: int = 50,
         progress_callback: Optional[Callable[[int, str], None]] = None,
@@ -221,14 +232,16 @@ class DocumentIngestionPipeline:
         Parameters
         ----------
         file_path:        Absolute path to the uploaded file.
+        user_id:          Owning user's ID — every stored key is scoped to it.
         chunk_size:       Maximum characters per chunk.
         chunk_overlap:    Characters of overlap between consecutive chunks.
         progress_callback: Optional ``(percent: int, message: str) -> None``.
-        category:         Destination category (folder name under /app/data/).
+        category:         Destination category (folder name under /app/data/<user_id>/).
 
         Returns
         -------
-        Dict with processing results.
+        Dict with processing results, including ``stored_bytes`` (the JSON
+        backup's size on disk, used for quota accounting).
         """
         try:
             if not self.validate_file_type(file_path):
@@ -250,10 +263,10 @@ class DocumentIngestionPipeline:
             _cb(progress_callback, 70, "Embeddings generated ✓")
 
             # 4a. Store in Redis
-            self._store_in_redis(file_path, chunks, embeddings, category)
+            self._store_in_redis(file_path, chunks, embeddings, category, user_id)
 
             # 4b. Save JSON backup to disk (durability)
-            self._save_json_backup(file_path, chunks, embeddings, category)
+            stored_bytes = self._save_json_backup(file_path, chunks, embeddings, category, user_id)
             _cb(progress_callback, 90, "Stored in Redis + JSON backup ✓")
 
             # 5. Delete original uploaded file
@@ -271,6 +284,7 @@ class DocumentIngestionPipeline:
                 "category": category,
                 "total_chunks": len(chunks),
                 "embedding_dimension": len(embeddings[0]) if embeddings else 0,
+                "stored_bytes": stored_bytes,
                 "message": "Document processed and stored successfully",
             }
 
@@ -292,14 +306,16 @@ class DocumentIngestionPipeline:
         file_path: str,
         chunks: list,
         embeddings: list,
-        category: str = "General",
+        category: str,
+        user_id: str,
     ) -> None:
-        """Write document data to Redis under ``document:<category>:<filename>``."""
+        """Write document data to Redis under ``document:<user_id>:<category>:<filename>``."""
         file_name = Path(file_path).name
-        doc_key = f"document:{category}:{file_name}"
+        doc_key = f"document:{user_id}:{category}:{file_name}"
         data = {
             "file_name": file_name,
             "category": category,
+            "user_id": user_id,
             "chunks": chunks,
             "embeddings": embeddings,
             "chunk_count": len(chunks),
@@ -308,7 +324,7 @@ class DocumentIngestionPipeline:
         self.redis_client.set(doc_key, json.dumps(data))
 
         for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-            vector_index.index_chunk(self.redis_client, category, file_name, i, chunk_text, embedding)
+            vector_index.index_chunk(self.redis_client, user_id, category, file_name, i, chunk_text, embedding)
 
         logger.info(f"Stored in Redis: {doc_key} ({len(chunks)} chunks, vector-indexed)")
 
@@ -317,24 +333,31 @@ class DocumentIngestionPipeline:
         file_path: str,
         chunks: list,
         embeddings: list,
-        category: str = "General",
-    ) -> None:
+        category: str,
+        user_id: str,
+    ) -> int:
         """
-        Write a portable JSON backup to ``/app/data/<category>/<stem>.json``.
+        Write a portable JSON backup to ``/app/data/<user_id>/<category>/<stem>.json``.
 
         This file is the source of truth used by ``reindex_from_disk`` on
         container restarts, so the knowledge base survives even if the Redis
-        volume is wiped.
+        volume is wiped. Its byte size on disk is also the canonical figure
+        used for per-user storage quota accounting (see ``utils.quota``) —
+        the Redis document blob and RediSearch chunk HASHes are derived
+        copies of this same content, not separate storage to also count.
+
+        Returns the backup file's size in bytes.
         """
         file_name = Path(file_path).name
         stem = Path(file_path).stem
-        backup_dir = Path(f"/app/data/{category}")
+        backup_dir = Path(f"/app/data/{user_id}/{category}")
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup_path = backup_dir / f"{stem}.json"
 
         data = {
             "file_name": file_name,
             "category": category,
+            "user_id": user_id,
             "chunks": chunks,
             "embeddings": embeddings,
             "chunk_count": len(chunks),
@@ -343,7 +366,9 @@ class DocumentIngestionPipeline:
         with open(backup_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh)
 
-        logger.info(f"Saved JSON backup: {backup_path}")
+        stored_bytes = backup_path.stat().st_size
+        logger.info(f"Saved JSON backup: {backup_path} ({stored_bytes} bytes)")
+        return stored_bytes
 
     # ─────────────────────────────────────────────────────────────────────────
     # Document parsers

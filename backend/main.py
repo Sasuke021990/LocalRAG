@@ -50,7 +50,7 @@ app = FastAPI(
         "cross-encoder re-ranking, semantic caching, and category-aware "
         "document management.\n\n"
         "All processed data is stored in Redis (fast retrieval) **and** as "
-        "portable JSON backups under `/app/data/<category>/` (durability)."
+        "portable JSON backups under `/app/data/<user_id>/<category>/` (durability)."
     ),
     version="2.0.0",
     docs_url="/docs",
@@ -145,13 +145,15 @@ async def health_check():
 @app.get("/categories", tags=["Categories"], summary="List all document categories")
 async def list_categories(user_id: str = Depends(require_current_user)):
     """
-    Returns the names of all category folders that exist under ``/app/data/``.
-    Categories are created automatically when a document is uploaded, or
-    explicitly via ``POST /categories``.
+    Returns the names of all category folders that exist under this user's
+    own ``/app/data/<user_id>/`` namespace. Categories are created
+    automatically when a document is uploaded, or explicitly via
+    ``POST /categories``.
     """
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        categories = sorted(d.name for d in DATA_DIR.iterdir() if d.is_dir())
+        user_dir = DATA_DIR / user_id
+        user_dir.mkdir(parents=True, exist_ok=True)
+        categories = sorted(d.name for d in user_dir.iterdir() if d.is_dir())
         return {"categories": categories, "total": len(categories)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -160,16 +162,14 @@ async def list_categories(user_id: str = Depends(require_current_user)):
 @app.post("/categories", tags=["Categories"], summary="Create a new category")
 async def create_category(request: CategoryCreate, user_id: str = Depends(require_current_user)):
     """
-    Creates a new category folder under ``/app/data/<name>/``.
-    The folder is also immediately visible on the Docker-mapped host path
-    (``KNOWLEDGE_DATA_PATH`` from ``.env``) at ``<KNOWLEDGE_DATA_PATH>/<name>/``.
+    Creates a new category folder under ``/app/data/<user_id>/<name>/``.
     """
     try:
         # Sanitise name — prevent path traversal
         name = request.name.strip().replace("/", "_").replace("\\", "_").replace("..", "_")
         if not name:
             raise HTTPException(status_code=400, detail="Category name cannot be empty")
-        category_dir = DATA_DIR / name
+        category_dir = DATA_DIR / user_id / name
         category_dir.mkdir(parents=True, exist_ok=True)
         return {"status": "created", "category": name}
     except HTTPException:
@@ -183,11 +183,11 @@ async def create_category(request: CategoryCreate, user_id: str = Depends(requir
 @app.get("/documents", tags=["Documents"], summary="List all indexed documents")
 async def list_documents(user_id: str = Depends(require_current_user)):
     """
-    Returns metadata for every document currently indexed in Redis.
+    Returns metadata for every document this user has indexed in Redis.
     Includes file name, category, chunk count, and processing timestamp.
     """
     try:
-        docs = ingestion_pipeline.list_documents()
+        docs = ingestion_pipeline.list_documents(user_id)
         return {"documents": docs, "total": len(docs)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -205,9 +205,10 @@ async def delete_document(
     file name exists in multiple categories.
     """
     try:
-        success = ingestion_pipeline.delete_document(file_name, category)
-        if not success:
+        freed_bytes = ingestion_pipeline.delete_document(file_name, category, user_id)
+        if freed_bytes is None:
             raise HTTPException(status_code=404, detail="Document not found")
+        # NOTE: quota.record_deleted_document(...) wiring lands in Phase 1.5.
         return {"status": "deleted", "file_name": file_name, "category": category}
     except HTTPException:
         raise
@@ -230,9 +231,9 @@ async def upload_document(
     Upload a document for ingestion.
 
     **Flow**:
-    1. File is validated and saved to ``/app/data/<category>/<filename>``
+    1. File is validated and saved to ``/app/data/<user_id>/<category>/<filename>``
     2. Background task: parse → chunk → embed → store → delete original
-    3. JSON backup written to ``/app/data/<category>/<stem>.json``
+    3. JSON backup written to ``/app/data/<user_id>/<category>/<stem>.json``
     4. The original uploaded file is deleted after ingestion
 
     Supported formats: ``.pdf``, ``.docx``, ``.txt``, ``.csv``, ``.md``,
@@ -251,13 +252,15 @@ async def upload_document(
         safe_cat = category.strip().replace("/", "_").replace("\\", "_").replace("..", "_") or "General"
 
         # Ensure directory exists and save file
-        category_dir = DATA_DIR / safe_cat
+        category_dir = DATA_DIR / user_id / safe_cat
         category_dir.mkdir(parents=True, exist_ok=True)
         file_path = str(category_dir / file.filename)
 
         content = await file.read()
         with open(file_path, "wb") as fh:
             fh.write(content)
+
+        # NOTE: quota.check_upload_allowed(...) pre-check lands in Phase 1.5.
 
         # Queue background processing
         # NOTE: Plain `def` (not `async def`) so FastAPI routes this to a
@@ -267,11 +270,14 @@ async def upload_document(
             try:
                 result = ingestion_pipeline.process_document(
                     file_path,
+                    user_id=user_id,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                     category=safe_cat,
                 )
                 logger.info(f"Processed: {file.filename} → {safe_cat} | {result['total_chunks']} chunks")
+                # NOTE: quota.record_ingested_document(...) + over-quota
+                # rollback lands in Phase 1.5.
             except Exception as exc:
                 logger.error(f"Background processing failed for '{file.filename}': {exc}")
 
