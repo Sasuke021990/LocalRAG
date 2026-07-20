@@ -219,6 +219,25 @@ No body required. Clears the session cookie. Response: {"status": "logged_out"}
 ### GET /auth/me
 Requires a session. Response: {"user_id", "email", "storage_used_bytes", "storage_quota_bytes"}
 
+### GET /auth/google/login
+Redirects to Google's consent screen. Requires `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` configured.
+
+### GET /auth/google/callback?code=...
+Google redirects here after consent. Exchanges the code for the user's Google identity,
+finds-or-creates a Vaultly account (linking by email if a password-based account already
+exists with the same address), sets the session cookie, and redirects to `FRONTEND_BASE_URL`.
+
+### POST /auth/password-reset/request
+Body: {"email"}. Always returns `{"status": "ok"}` regardless of whether the email is
+registered (never leaks account existence). If it is, sends a reset link via SMTP
+(requires `SMTP_HOST` configured; silently no-ops otherwise).
+
+### POST /auth/password-reset/confirm
+Body: {"token", "new_password"}. Sets the new password and invalidates every existing
+session for that account (including a possibly-hijacked one -- exactly the scenario a
+reset is meant to recover from). Response: {"status": "password_updated"}. 400 if the
+token is invalid or has expired (tokens are single-use, 1-hour TTL).
+
 ### GET /
 Returns API version and status.
 Response: {"message": "LocalRAG API v2.0 is running", "version": "2.0.0"}
@@ -392,6 +411,11 @@ Set these in `.env` (copy from `.env.example`) — `docker-compose.yml` reads th
 | JWT_SECRET | (required) | Signs account session tokens (`openssl rand -hex 32`) — app refuses to start without it |
 | SESSION_COOKIE_MAX_AGE_SECONDS | 604800 (7 days) | Session lifetime |
 | DEFAULT_STORAGE_QUOTA_BYTES | 1073741824 (1 GiB) | Default per-account storage quota |
+| FRONTEND_BASE_URL | http://localhost:3000 | Used to build password-reset links and the post-OAuth-login redirect |
+| GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET | (unset) | Optional — enables "Sign in with Google" when both are set |
+| GOOGLE_REDIRECT_URI | http://localhost:3000/api/auth/google/callback | Must match the redirect URI registered in the Google Cloud Console |
+| SMTP_HOST / SMTP_USER / SMTP_PASSWORD | (unset) | Optional — enables password-reset emails when SMTP_HOST is set |
+| SMTP_PORT / SMTP_FROM / SMTP_USE_TLS | 587 / noreply@vaultly.local / True | SMTP delivery settings |
 | CORS_ALLOWED_ORIGINS | http://localhost:3000 | Comma-separated list of allowed CORS origins |
 | SEMANTIC_CACHE_SIMILARITY_THRESHOLD | 0.92 | Minimum cosine similarity for a semantic cache hit |
 

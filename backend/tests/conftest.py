@@ -119,6 +119,41 @@ def redisearch_vector_available():
 
 
 @pytest.fixture
+def auth_client(redis_client):
+    """
+    A TestClient for a minimal app mounting only the real auth router +
+    a /protected probe route -- exercises the actual production
+    auth.routes/auth.dependencies code without needing main.py's heavy
+    ML components (which require RediSearch VECTOR field support just to
+    construct, unrelated to anything auth does). Lets auth-only tests
+    run in any environment with a plain Redis, not just one with
+    redis-stack.
+
+    auth.redis_client's module-level client and this fixture's
+    redis_client both connect using the same REDIS_HOST/REDIS_PORT env
+    vars, so they're already the same Redis server/db -- no connection
+    wiring needed, just make sure auth.redis_client is imported (and
+    therefore connected) after the env vars this module reads are set,
+    which conftest.py's REDIS_HOST/REDIS_PORT module-level constants
+    already guarantee.
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from auth import routes as auth_routes
+    from auth.dependencies import require_current_user
+
+    app = FastAPI()
+    app.include_router(auth_routes.router, prefix="/auth")
+
+    @app.get("/protected")
+    async def _protected(user_id: str = Depends(require_current_user)):
+        return {"user_id": user_id}
+
+    return TestClient(app)
+
+
+@pytest.fixture
 def no_vector_index(monkeypatch):
     """
     Stub out retrieval.vector_index's Redis-writing calls as no-ops.

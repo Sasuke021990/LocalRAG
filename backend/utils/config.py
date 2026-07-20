@@ -59,6 +59,20 @@ class Config:
     JWT_SECRET: str = os.getenv('JWT_SECRET', '')
     SESSION_COOKIE_MAX_AGE_SECONDS: int = int(os.getenv('SESSION_COOKIE_MAX_AGE_SECONDS', 7 * 24 * 3600))
     DEFAULT_STORAGE_QUOTA_BYTES: int = int(os.getenv('DEFAULT_STORAGE_QUOTA_BYTES', 1024 ** 3))
+    FRONTEND_BASE_URL: str = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000')
+
+    # === Google OAuth Configuration ===
+    GOOGLE_CLIENT_ID: str = os.getenv('GOOGLE_CLIENT_ID', '')
+    GOOGLE_CLIENT_SECRET: str = os.getenv('GOOGLE_CLIENT_SECRET', '')
+    GOOGLE_REDIRECT_URI: str = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:3000/api/auth/google/callback')
+
+    # === SMTP Configuration (password reset email) ===
+    SMTP_HOST: str = os.getenv('SMTP_HOST', '')
+    SMTP_PORT: int = int(os.getenv('SMTP_PORT', 587))
+    SMTP_USER: str = os.getenv('SMTP_USER', '')
+    SMTP_PASSWORD: str = os.getenv('SMTP_PASSWORD', '')
+    SMTP_FROM: str = os.getenv('SMTP_FROM', 'noreply@vaultly.local')
+    SMTP_USE_TLS: bool = os.getenv('SMTP_USE_TLS', 'True').lower() == 'true'
 
     @classmethod
     def validate(cls):
