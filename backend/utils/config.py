@@ -47,10 +47,6 @@ class Config:
     USE_ROCM: bool = os.getenv('USE_ROCM', 'True').lower() == 'true'
 
     # === Security Configuration ===
-    # Unset (default) = auth disabled, matching today's zero-friction local
-    # deployment. Set API_KEY to require an `x-api-key` header on every
-    # route except GET / and GET /health.
-    API_KEY: Optional[str] = os.getenv('API_KEY') or None
     CORS_ALLOWED_ORIGINS_LIST: list = [
         origin.strip()
         for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
@@ -77,12 +73,6 @@ class Config:
             raise ValueError("REDIS_PORT must be between 1 and 65535")
         if cls.APP_PORT <= 0 or cls.APP_PORT > 65535:
             raise ValueError("APP_PORT must be between 1 and 65535")
-        if not cls.API_KEY:
-            import logging
-            logging.getLogger(__name__).warning(
-                "API_KEY is not set — all endpoints are unauthenticated. "
-                "Set API_KEY to require an x-api-key header."
-            )
         if not cls.JWT_SECRET:
             raise ValueError(
                 "JWT_SECRET must be set (e.g. `openssl rand -hex 32`) — required for "

@@ -200,6 +200,25 @@ If no category is specified, documents go to General.
 
 Full interactive docs at: http://localhost:8000/docs
 
+Every route below except `GET /`, `GET /health`, and `POST /auth/*` requires
+a signed-in session — an httpOnly cookie (set automatically for web
+clients) or an `Authorization: Bearer <token>` header (mobile/API
+clients). See section 10 for `JWT_SECRET`.
+
+### POST /auth/signup
+Create an account. Body: {"email": "you@example.com", "password": "at least 8 chars"}
+Response: {"user_id", "email", "storage_used_bytes", "storage_quota_bytes", "session_token"}
+Also sets the session cookie.
+
+### POST /auth/login
+Body: {"email", "password"}. Same response shape as signup.
+
+### POST /auth/logout
+No body required. Clears the session cookie. Response: {"status": "logged_out"}
+
+### GET /auth/me
+Requires a session. Response: {"user_id", "email", "storage_used_bytes", "storage_quota_bytes"}
+
 ### GET /
 Returns API version and status.
 Response: {"message": "LocalRAG API v2.0 is running", "version": "2.0.0"}
@@ -370,7 +389,9 @@ Set these in `.env` (copy from `.env.example`) — `docker-compose.yml` reads th
 | REDIS_DB   | 0    | Redis database |
 | KNOWLEDGE_DATA_PATH | ./data | Host directory mounted at /app/data |
 | REDIS_DATA_PATH | (named volume) | Host directory mounted at /data (TrueNAS compose only) |
-| API_KEY | (unset) | If set, required as the `x-api-key` header on every route except GET / and GET /health |
+| JWT_SECRET | (required) | Signs account session tokens (`openssl rand -hex 32`) — app refuses to start without it |
+| SESSION_COOKIE_MAX_AGE_SECONDS | 604800 (7 days) | Session lifetime |
+| DEFAULT_STORAGE_QUOTA_BYTES | 1073741824 (1 GiB) | Default per-account storage quota |
 | CORS_ALLOWED_ORIGINS | http://localhost:3000 | Comma-separated list of allowed CORS origins |
 | SEMANTIC_CACHE_SIMILARITY_THRESHOLD | 0.92 | Minimum cosine similarity for a semantic cache hit |
 

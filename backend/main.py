@@ -19,13 +19,15 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from auth import routes as auth_routes
+from auth.dependencies import require_current_user
 from ingestion.pipeline import DocumentIngestionPipeline
 from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker
@@ -63,15 +65,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-async def require_api_key(x_api_key: Optional[str] = Header(None)) -> None:
-    """
-    Guard dependency applied to every route except GET / and GET /health.
-    A no-op when API_KEY is unset (default), preserving the app's
-    zero-friction local-only behavior.
-    """
-    if config.API_KEY and x_api_key != config.API_KEY:
-        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+app.include_router(auth_routes.router, prefix="/auth", tags=["Auth"])
 
 
 # ─── Component initialisation ─────────────────────────────────────────────────
@@ -148,9 +142,8 @@ async def health_check():
 
 # ─── Categories ───────────────────────────────────────────────────────────────
 
-@app.get("/categories", tags=["Categories"],
-         summary="List all document categories", dependencies=[Depends(require_api_key)])
-async def list_categories():
+@app.get("/categories", tags=["Categories"], summary="List all document categories")
+async def list_categories(user_id: str = Depends(require_current_user)):
     """
     Returns the names of all category folders that exist under ``/app/data/``.
     Categories are created automatically when a document is uploaded, or
@@ -164,9 +157,8 @@ async def list_categories():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/categories", tags=["Categories"],
-          summary="Create a new category", dependencies=[Depends(require_api_key)])
-async def create_category(request: CategoryCreate):
+@app.post("/categories", tags=["Categories"], summary="Create a new category")
+async def create_category(request: CategoryCreate, user_id: str = Depends(require_current_user)):
     """
     Creates a new category folder under ``/app/data/<name>/``.
     The folder is also immediately visible on the Docker-mapped host path
@@ -188,9 +180,8 @@ async def create_category(request: CategoryCreate):
 
 # ─── Documents ────────────────────────────────────────────────────────────────
 
-@app.get("/documents", tags=["Documents"],
-         summary="List all indexed documents", dependencies=[Depends(require_api_key)])
-async def list_documents():
+@app.get("/documents", tags=["Documents"], summary="List all indexed documents")
+async def list_documents(user_id: str = Depends(require_current_user)):
     """
     Returns metadata for every document currently indexed in Redis.
     Includes file name, category, chunk count, and processing timestamp.
@@ -202,9 +193,12 @@ async def list_documents():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.delete("/documents/{file_name}", tags=["Documents"],
-            summary="Delete a document", dependencies=[Depends(require_api_key)])
-async def delete_document(file_name: str, category: str = "General"):
+@app.delete("/documents/{file_name}", tags=["Documents"], summary="Delete a document")
+async def delete_document(
+    file_name: str,
+    category: str = "General",
+    user_id: str = Depends(require_current_user),
+):
     """
     Removes the document from Redis **and** deletes its JSON backup from disk.
     Pass ``?category=<name>`` to identify the correct document when the same
@@ -223,14 +217,14 @@ async def delete_document(file_name: str, category: str = "General"):
 
 # ─── Upload ───────────────────────────────────────────────────────────────────
 
-@app.post("/upload", tags=["Documents"],
-          summary="Upload and ingest a document", dependencies=[Depends(require_api_key)])
+@app.post("/upload", tags=["Documents"], summary="Upload and ingest a document")
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Document file to ingest"),
     chunk_size: int = Form(512, description="Characters per chunk"),
     chunk_overlap: int = Form(50, description="Overlap between chunks"),
     category: str = Form("General", description="Destination category"),
+    user_id: str = Depends(require_current_user),
 ):
     """
     Upload a document for ingestion.
@@ -299,9 +293,8 @@ async def upload_document(
 
 # ─── Query ────────────────────────────────────────────────────────────────────
 
-@app.post("/query", response_model=QueryResponse, tags=["Search"],
-          summary="Hybrid search + re-rank + cache", dependencies=[Depends(require_api_key)])
-async def query_documents(request: QueryRequest):
+@app.post("/query", response_model=QueryResponse, tags=["Search"], summary="Hybrid search + re-rank + cache")
+async def query_documents(request: QueryRequest, user_id: str = Depends(require_current_user)):
     """
     Query the knowledge base using the full RAG pipeline:
 
@@ -381,9 +374,8 @@ async def query_documents(request: QueryRequest):
 
 # ─── SSE progress stream ──────────────────────────────────────────────────────
 
-@app.get("/progress/{task_id}", tags=["System"],
-         summary="SSE progress stream for a background task", dependencies=[Depends(require_api_key)])
-async def stream_progress(task_id: str):
+@app.get("/progress/{task_id}", tags=["System"], summary="SSE progress stream for a background task")
+async def stream_progress(task_id: str, user_id: str = Depends(require_current_user)):
     """
     Server-Sent Events endpoint that streams progress updates (0–100 %)
     for a background ingestion task.
