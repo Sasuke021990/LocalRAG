@@ -21,6 +21,7 @@ jobs:
     env:
       REDIS_HOST: localhost
       REDIS_PORT: 6379
+      JWT_SECRET: ci-test-secret-not-for-production
     steps:
       - uses: actions/checkout@v4
 

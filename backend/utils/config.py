@@ -57,6 +57,13 @@ class Config:
         if origin.strip()
     ]
 
+    # === Auth / Session Configuration (Vaultly multi-user) ===
+    # No default — a missing secret at import time is a startup-time bug,
+    # not a runtime surprise. Generate with e.g. `openssl rand -hex 32`.
+    JWT_SECRET: str = os.getenv('JWT_SECRET', '')
+    SESSION_COOKIE_MAX_AGE_SECONDS: int = int(os.getenv('SESSION_COOKIE_MAX_AGE_SECONDS', 7 * 24 * 3600))
+    DEFAULT_STORAGE_QUOTA_BYTES: int = int(os.getenv('DEFAULT_STORAGE_QUOTA_BYTES', 1024 ** 3))
+
     @classmethod
     def validate(cls):
         """
@@ -75,6 +82,11 @@ class Config:
             logging.getLogger(__name__).warning(
                 "API_KEY is not set — all endpoints are unauthenticated. "
                 "Set API_KEY to require an x-api-key header."
+            )
+        if not cls.JWT_SECRET:
+            raise ValueError(
+                "JWT_SECRET must be set (e.g. `openssl rand -hex 32`) — required for "
+                "account sessions."
             )
 
 # Initialize and validate config
