@@ -61,6 +61,11 @@ class Config:
     DEFAULT_STORAGE_QUOTA_BYTES: int = int(os.getenv('DEFAULT_STORAGE_QUOTA_BYTES', 1024 ** 3))
     FRONTEND_BASE_URL: str = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000')
 
+    # Email of the operator/admin account. A user whose email matches this is
+    # treated as an admin (metadata-only admin panel) regardless of their
+    # stored is_admin flag. Leave unset to designate no env-level admin.
+    ADMIN_EMAIL: str = os.getenv('ADMIN_EMAIL', '')
+
     # === Google OAuth Configuration ===
     GOOGLE_CLIENT_ID: str = os.getenv('GOOGLE_CLIENT_ID', '')
     GOOGLE_CLIENT_SECRET: str = os.getenv('GOOGLE_CLIENT_SECRET', '')

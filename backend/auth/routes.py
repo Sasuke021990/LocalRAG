@@ -16,6 +16,7 @@ from auth.schemas import (
     SignupRequest,
     UserOut,
 )
+from utils import system_settings
 from utils.config import config
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ def _user_out(user: dict, token: str) -> AuthResponse:
 
 @router.post("/signup", response_model=AuthResponse)
 async def signup(body: SignupRequest, response: Response):
+    if not system_settings.signups_enabled(redis_client):
+        raise HTTPException(status_code=403, detail="Public signups are currently disabled")
     try:
         user_id = store.create_user(
             redis_client, body.email, password_hash=passwords.hash_password(body.password)

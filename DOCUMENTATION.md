@@ -377,6 +377,37 @@ Delivery is best-effort with up to `WEBHOOK_MAX_RETRIES` attempts and a
 
 ---
 
+## 6b. Admin API (metadata-only)
+
+Operator endpoints for managing users and runtime settings. **All admin
+routes require a logged-in admin session** — an MCP/API token is never
+accepted. A user is an admin if their email matches `ADMIN_EMAIL`
+(section 10) or another admin has promoted them.
+
+> **Privacy guarantee (architectural, not cosmetic):** no admin endpoint
+> can return any user's document content, chunk text, query history, or
+> cache entries. Admins see only account metadata (email, storage
+> used/quota, status, created_at) and *counts* (documents, webhooks,
+> tokens). This is enforced in the data-access layer.
+
+### Users
+- **GET /admin/users?limit=&offset=** — List users with metadata + document count.
+- **GET /admin/users/{user_id}** — One user's metadata + document/webhook/token counts.
+- **PATCH /admin/users/{user_id}/quota** — Body: `{"quota_bytes": 5368709120}`. Increase/decrease a user's storage quota.
+- **PATCH /admin/users/{user_id}/status** — Body: `{"is_active": false}`. Deactivate (their sessions immediately 403) or reactivate an account.
+- **PATCH /admin/users/{user_id}/admin** — Body: `{"is_admin": true}`. Promote/demote an admin.
+- **DELETE /admin/users/{user_id}** — Permanently delete a user and **all** their data (documents, chunks, cache, tokens, webhooks, disk backups).
+
+The root admin (`ADMIN_EMAIL`) and your own account are protected: you
+cannot deactivate, demote, or delete them (400).
+
+### System
+- **GET /admin/stats** — Aggregate metadata: `{total_users, active_users, admin_users, total_storage_used_bytes, total_documents, total_webhooks, total_tokens}`.
+- **GET /admin/settings** — Current runtime settings.
+- **PATCH /admin/settings** — Body: `{"name": "signups_enabled", "value": false}` or `{"name": "default_storage_quota_bytes", "value": 2147483648}`. Runtime-mutable settings (take effect immediately, no restart): `signups_enabled` (open/close public registration) and `default_storage_quota_bytes` (quota new signups inherit).
+
+---
+
 ## 7. Frontend Guide
 
 Access at http://localhost:8501
@@ -477,6 +508,7 @@ Set these in `.env` (copy from `.env.example`) — `docker-compose.yml` reads th
 | SESSION_COOKIE_MAX_AGE_SECONDS | 604800 (7 days) | Session lifetime |
 | DEFAULT_STORAGE_QUOTA_BYTES | 1073741824 (1 GiB) | Default per-account storage quota |
 | FRONTEND_BASE_URL | http://localhost:3000 | Used to build password-reset links and the post-OAuth-login redirect |
+| ADMIN_EMAIL | (unset) | Email of the operator/admin account — grants access to the metadata-only admin panel (`/admin/*`) |
 | GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET | (unset) | Optional — enables "Sign in with Google" when both are set |
 | GOOGLE_REDIRECT_URI | http://localhost:3000/api/auth/google/callback | Must match the redirect URI registered in the Google Cloud Console |
 | SMTP_HOST / SMTP_USER / SMTP_PASSWORD | (unset) | Optional — enables password-reset emails when SMTP_HOST is set |
