@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from admin import routes as admin_routes
 from auth import routes as auth_routes
 from auth.dependencies import require_current_user
 from auth.redis_client import redis_client as auth_redis_client
@@ -71,6 +72,7 @@ app.add_middleware(
 
 app.include_router(auth_routes.router, prefix="/auth", tags=["Auth"])
 app.include_router(integrations_routes.router, prefix="/integrations", tags=["Integrations"])
+app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 
 
 # ─── Component initialisation ─────────────────────────────────────────────────

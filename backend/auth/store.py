@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from utils import system_settings
 from utils.config import config
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def create_user(redis_client, email: str, password_hash: str = "", google_sub: s
             "google_sub": google_sub,
             "created_at": datetime.now().isoformat(),
             "token_version": 0,
-            "storage_quota_bytes": config.DEFAULT_STORAGE_QUOTA_BYTES,
+            "storage_quota_bytes": system_settings.get_default_quota(redis_client),
             "storage_used_bytes": 0,
             "is_admin": 0,
             "is_active": 1,
