@@ -154,6 +154,30 @@ def auth_client(redis_client):
 
 
 @pytest.fixture
+def test_user(redis_client):
+    """A real user row in Redis, for tests that need a valid user_id without going through HTTP signup."""
+    from auth import passwords, store
+
+    return store.create_user(
+        redis_client,
+        email="test@example.com",
+        password_hash=passwords.hash_password("testpassword123"),
+    )
+
+
+@pytest.fixture
+def second_test_user(redis_client):
+    """A second, distinct user row -- for cross-user isolation tests alongside test_user."""
+    from auth import passwords, store
+
+    return store.create_user(
+        redis_client,
+        email="test2@example.com",
+        password_hash=passwords.hash_password("testpassword123"),
+    )
+
+
+@pytest.fixture
 def no_vector_index(monkeypatch):
     """
     Stub out retrieval.vector_index's Redis-writing calls as no-ops.
