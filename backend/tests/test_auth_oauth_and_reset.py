@@ -129,6 +129,9 @@ class TestGoogleCallback:
         # the account was linked, not duplicated.
         resp = auth_client.get("/auth/google/callback", params={"code": "irrelevant"}, follow_redirects=False)
         assert resp.status_code in (302, 307)
+        # The redirect MUST carry the session cookie, or the user lands on
+        # the frontend still logged out (regression guard).
+        assert "set-cookie" in {k.lower() for k in resp.headers}
 
         relinked = store.get_user_by_google_sub(redis_client, "google-sub-456")
         assert relinked["user_id"] == existing["user_id"]
@@ -141,7 +144,14 @@ class TestGoogleCallback:
         )
         resp = auth_client.get("/auth/google/callback", params={"code": "irrelevant"}, follow_redirects=False)
         assert resp.status_code in (302, 307)
+        assert "set-cookie" in {k.lower() for k in resp.headers}
 
         created = store.get_user_by_google_sub(redis_client, "google-sub-789")
         assert created is not None
         assert created["email"] == "brandnew@example.com"
+
+        # The cookie set by the redirect must actually authenticate the
+        # session -- the point of logging in at all.
+        me = auth_client.get("/auth/me")
+        assert me.status_code == 200
+        assert me.json()["email"] == "brandnew@example.com"
