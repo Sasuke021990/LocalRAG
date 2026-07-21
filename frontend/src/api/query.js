@@ -1,7 +1,7 @@
 import { request, jsonBody } from './client.js'
 
-export const sendQuery = (query, topK = 10, rerankTopK = 5) =>
-  request('/query', jsonBody('POST', { query, top_k: topK, rerank_top_k: rerankTopK }))
+export const sendQuery = (query, topK = 10, rerankTopK = 5, pool = '') =>
+  request('/query', jsonBody('POST', { query, top_k: topK, rerank_top_k: rerankTopK, pool: pool || null }))
 
 export const fetchHealth = () => request('/health')
 
@@ -13,7 +13,7 @@ const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/
  * handlers: { onSources(list), onThinking(text), onToken(text), onRefusal(msg), onDone(data), onError(err) }
  * Returns a function that aborts the stream.
  */
-export function streamQuery(query, { topK = 10, rerankTopK = 5 } = {}, handlers = {}) {
+export function streamQuery(query, { topK = 10, rerankTopK = 5, pool = '' } = {}, handlers = {}) {
   const controller = new AbortController()
 
   ;(async () => {
@@ -22,7 +22,7 @@ export function streamQuery(query, { topK = 10, rerankTopK = 5 } = {}, handlers 
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, top_k: topK, rerank_top_k: rerankTopK }),
+        body: JSON.stringify({ query, top_k: topK, rerank_top_k: rerankTopK, pool: pool || null }),
         signal: controller.signal,
       })
       if (!res.ok || !res.body) {

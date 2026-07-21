@@ -157,8 +157,13 @@ class HybridSearchEngine:
             logger.error(f"Error setting up BM25 index for user {user_id}: {str(e)}")
             self._bm25_by_user.pop(user_id, None)
 
-    def search_bm25(self, user_id: str, query: str, top_k: int = 10) -> List[SearchResult]:
-        """BM25 keyword search over one user's index — returns results with real content and metadata."""
+    def search_bm25(self, user_id: str, query: str, top_k: int = 10, pool: str = None) -> List[SearchResult]:
+        """
+        BM25 keyword search over one user's index — returns results with real
+        content and metadata. When ``pool`` is given, only chunks from that
+        pool are considered (the per-user index spans all pools, so this
+        filters at query time while keeping the top-``top_k`` within the pool).
+        """
         state = self._bm25_by_user.get(user_id)
         if not state or not state.bm25 or not BM25_AVAILABLE:
             logger.warning(f"BM25 not available for search (user {user_id})")
@@ -167,18 +172,23 @@ class HybridSearchEngine:
         try:
             query_tokens  = query.lower().split()
             bm25_scores   = state.bm25.get_scores(query_tokens)
-            top_indices   = np.argsort(bm25_scores)[::-1][:top_k]
+            order         = np.argsort(bm25_scores)[::-1]  # descending
 
             results = []
-            for idx in top_indices:
-                if bm25_scores[idx] > 0:
-                    meta = state.doc_meta[idx] if idx < len(state.doc_meta) else {}
-                    results.append(SearchResult(
-                        content  = state.corpus_raw[idx] if idx < len(state.corpus_raw) else ' '.join(state.corpus[idx]),
-                        score    = float(bm25_scores[idx]),
-                        metadata = meta,
-                        source   = 'bm25',
-                    ))
+            for idx in order:
+                if bm25_scores[idx] <= 0:
+                    break  # scores are sorted descending — nothing useful past here
+                meta = state.doc_meta[idx] if idx < len(state.doc_meta) else {}
+                if pool and meta.get('pool') != pool:
+                    continue  # restrict to the selected pool
+                results.append(SearchResult(
+                    content  = state.corpus_raw[idx] if idx < len(state.corpus_raw) else ' '.join(state.corpus[idx]),
+                    score    = float(bm25_scores[idx]),
+                    metadata = meta,
+                    source   = 'bm25',
+                ))
+                if len(results) >= top_k:
+                    break
 
             logger.info(f"BM25 search returned {len(results)} results for query: '{query}'")
             return results
@@ -186,8 +196,8 @@ class HybridSearchEngine:
         except Exception as e:
             logger.error(f"Error in BM25 search: {str(e)}")
             return []
-    
-    def search_redis(self, user_id: str, query: str, top_k: int = 10) -> List[SearchResult]:
+
+    def search_redis(self, user_id: str, query: str, top_k: int = 10, pool: str = None) -> List[SearchResult]:
         """
         Dense/vector search: embeds ``query`` with the same model used to
         embed documents, then runs a RediSearch KNN cosine-similarity query
@@ -209,7 +219,7 @@ class HybridSearchEngine:
                 return []
 
             query_embedding = self.model.encode(query).tolist()
-            hits = vector_index.knn_search(self.redis_client, user_id, query_embedding, top_k)
+            hits = vector_index.knn_search(self.redis_client, user_id, query_embedding, top_k, pool=pool)
 
             results = [
                 SearchResult(
@@ -280,14 +290,18 @@ class HybridSearchEngine:
             logger.error(f"Error in result fusion: {str(e)}")
             return []
     
-    def search(self, user_id: str, query: str, top_k: int = 10) -> List[SearchResult]:
+    def search(self, user_id: str, query: str, top_k: int = 10, pool: str = None) -> List[SearchResult]:
         """
         Hybrid search for one user: auto-loads that user's BM25 index from
         Redis if not yet built, then combines BM25 (sparse) + vector KNN
         (dense) results with RRF fusion. Every step below is scoped to
         ``user_id`` — this method never touches another user's chunks.
+
+        When ``pool`` is given, retrieval is further restricted to that
+        knowledge pool (both the sparse and dense sides), so the model only
+        ever sees passages from the pool the user selected.
         """
-        logger.info(f"Performing hybrid search for user {user_id}, query: '{query}'")
+        logger.info(f"Performing hybrid search for user {user_id}, query: '{query}', pool: {pool or 'ALL'}")
 
         # Auto-populate this user's BM25 index from Redis if not cached yet
         if user_id not in self._bm25_by_user and self.redis_client:
@@ -317,8 +331,8 @@ class HybridSearchEngine:
             except Exception as exc:
                 logger.error(f"BM25 auto-load failed for user {user_id}: {exc}")
 
-        bm25_results  = self.search_bm25(user_id, query, top_k * 2)
-        redis_results = self.search_redis(user_id, query, top_k * 2)
+        bm25_results  = self.search_bm25(user_id, query, top_k * 2, pool=pool)
+        redis_results = self.search_redis(user_id, query, top_k * 2, pool=pool)
         fused_results = self.fuse_results(bm25_results, redis_results, top_k)
 
         logger.info(f"Hybrid search completed with {len(fused_results)} results")

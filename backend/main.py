@@ -22,7 +22,7 @@ import logging
 import os
 import secrets
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -156,6 +156,9 @@ class QueryRequest(BaseModel):
     query: str
     top_k: int = 10
     rerank_top_k: int = 5
+    # Optional: restrict retrieval to a single knowledge pool. Blank/None
+    # searches across all of the user's pools (the previous behaviour).
+    pool: Optional[str] = None
 
 class QueryResponse(BaseModel):
     answer: str
@@ -471,6 +474,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
             top_k=request.top_k, rerank_top_k=request.rerank_top_k,
             hybrid_search=hybrid_search, reranker=reranker,
             semantic_cache=semantic_cache, llm=local_llm,
+            pool=request.pool or None,
         )
         return QueryResponse(
             answer=result["answer"],
@@ -500,6 +504,7 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(require_cur
                 top_k=request.top_k, rerank_top_k=request.rerank_top_k,
                 hybrid_search=hybrid_search, reranker=reranker,
                 semantic_cache=semantic_cache, llm=local_llm,
+                pool=request.pool or None,
             ):
                 # JSON-encode every payload (even token strings) so the client
                 # parses uniformly and newlines never break SSE framing.

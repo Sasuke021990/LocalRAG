@@ -65,9 +65,14 @@ async def stream_answer(
     reranker,
     semantic_cache,
     llm,
+    pool: str = None,
 ) -> AsyncIterator[Tuple[str, Any]]:
+    # Cache is scoped per (user, pool): the same question answered against a
+    # different pool must not serve a cross-pool cached answer.
+    cache_scope = f"{user_id}::pool::{pool}" if pool else user_id
+
     # 1. Cache — instant replay, no retrieval or generation.
-    cached = semantic_cache.get_cached_result(user_id, query)
+    cached = semantic_cache.get_cached_result(cache_scope, query)
     if cached and cached.results:
         entry = cached.results[0]
         yield ("sources", entry.get("sources", []))
@@ -95,8 +100,8 @@ async def stream_answer(
         })
         return
 
-    # 2. Retrieve + rerank.
-    results = hybrid_search.search(user_id, query=query, top_k=top_k)
+    # 2. Retrieve + rerank (restricted to the selected pool when one is given).
+    results = hybrid_search.search(user_id, query=query, top_k=top_k, pool=pool)
     reranked = reranker.rerank(query=query, results=results, top_k=rerank_top_k) if rerank_top_k > 0 else results
     sources = _sources_from(reranked)
     yield ("sources", sources)
@@ -116,7 +121,7 @@ async def stream_answer(
     if not getattr(llm, "ready", False):
         answer = _fallback_answer(query, sources)
         yield ("token", answer)
-        semantic_cache.set_cached_result(user_id, query, [{"answer": answer, "sources": sources, "reasoning": ""}])
+        semantic_cache.set_cached_result(cache_scope, query, [{"answer": answer, "sources": sources, "reasoning": ""}])
         yield ("done", {"answer": answer, "reasoning": "", "sources": sources, "refused": False, "cached": False})
         return
 
@@ -144,7 +149,7 @@ async def stream_answer(
             answer_parts.append(text)
             yield ("token", text)
 
-    answer = "".join(answer_parts).strip()
+    answer = grounding.strip_trailing_refusal("".join(answer_parts).strip())
     reasoning = "".join(reasoning_parts).strip()
     if not answer:
         # Model produced only reasoning / nothing usable — fall back rather than
@@ -153,17 +158,17 @@ async def stream_answer(
         yield ("token", answer)
 
     semantic_cache.set_cached_result(
-        user_id, query, [{"answer": answer, "sources": sources, "reasoning": reasoning}]
+        cache_scope, query, [{"answer": answer, "sources": sources, "reasoning": reasoning}]
     )
     yield ("done", {"answer": answer, "reasoning": reasoning, "sources": sources, "refused": False, "cached": False})
 
 
-async def answer_query(*, user_id, query, top_k, rerank_top_k, hybrid_search, reranker, semantic_cache, llm) -> Dict[str, Any]:
+async def answer_query(*, user_id, query, top_k, rerank_top_k, hybrid_search, reranker, semantic_cache, llm, pool=None) -> Dict[str, Any]:
     """Non-streaming: drain ``stream_answer`` into a final dict."""
     final = {"answer": "", "reasoning": "", "sources": [], "refused": False}
     async for event, data in stream_answer(
         user_id=user_id, query=query, top_k=top_k, rerank_top_k=rerank_top_k,
-        hybrid_search=hybrid_search, reranker=reranker, semantic_cache=semantic_cache, llm=llm,
+        hybrid_search=hybrid_search, reranker=reranker, semantic_cache=semantic_cache, llm=llm, pool=pool,
     ):
         if event == "done":
             final = {k: data[k] for k in ("answer", "reasoning", "sources", "refused")}

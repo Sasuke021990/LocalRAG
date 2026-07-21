@@ -181,6 +181,12 @@ class OpenAICompatibleLLM(BaseLLM):
                 try:
                     resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=120)
                     resp.raise_for_status()
+                    # Inference servers stream UTF-8, but `requests` defaults a
+                    # text/event-stream response with no explicit charset to
+                    # Latin-1 (RFC 2616) — which corrupts any non-ASCII token
+                    # (em dashes, curly quotes, emoji) into mojibake. Pin UTF-8
+                    # so decode_unicode below decodes correctly.
+                    resp.encoding = "utf-8"
                     for raw in resp.iter_lines(decode_unicode=True):
                         if not raw or not raw.startswith("data:"):
                             continue

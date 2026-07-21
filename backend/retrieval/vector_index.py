@@ -130,7 +130,13 @@ def delete_chunks(redis_client: Redis, user_id: str, pool: str, file_name: str, 
     redis_client.delete(*keys)
 
 
-def knn_search(redis_client: Redis, user_id: str, query_embedding: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
+def knn_search(
+    redis_client: Redis,
+    user_id: str,
+    query_embedding: List[float],
+    top_k: int = 10,
+    pool: str = None,
+) -> List[Dict[str, Any]]:
     """
     Run a RediSearch KNN vector query pre-filtered to one user's chunks
     (``@user_id:{<uid>}``) and return hits sorted by similarity (highest
@@ -138,13 +144,20 @@ def knn_search(redis_client: Redis, user_id: str, query_embedding: List[float], 
     chunks indexed) rather than raising, matching the fail-soft convention
     used elsewhere in the retrieval layer.
 
+    When ``pool`` is given, the query is additionally pre-filtered to that
+    pool (``@pool:{<pool>}``), so the KNN only ever considers chunks from
+    the selected knowledge pool.
+
     The TAG filter is a pre-filter on the KNN clause itself, not a
     post-filter — RediSearch never considers another user's vectors as
     KNN candidates, so this is a hard isolation boundary, not a courtesy.
     """
     vector_bytes = np.array(query_embedding, dtype=np.float32).tobytes()
+    filter_expr = f"@user_id:{{{escape_tag_value(user_id)}}}"
+    if pool:
+        filter_expr += f" @pool:{{{escape_tag_value(pool)}}}"
     query = (
-        Query(f"(@user_id:{{{escape_tag_value(user_id)}}})=>[KNN {top_k} @embedding $vec AS score]")
+        Query(f"({filter_expr})=>[KNN {top_k} @embedding $vec AS score]")
         .sort_by("score")
         .return_fields("content", "file_name", "pool", "chunk_index", "score")
         .dialect(2)
