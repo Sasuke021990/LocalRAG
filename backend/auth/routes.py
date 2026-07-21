@@ -11,6 +11,7 @@ from auth.dependencies import require_current_user
 from auth.redis_client import redis_client
 from auth.schemas import (
     ChangePasswordSchema,
+    GoogleTokenExchangeSchema,
     LoginRequest,
     PasswordResetConfirmSchema,
     PasswordResetRequestSchema,
@@ -148,10 +149,8 @@ async def google_login():
     return RedirectResponse(google_oauth.build_authorization_url(state))
 
 
-@router.get("/google/callback")
-async def google_callback(code: str):
-    userinfo = google_oauth.exchange_code_for_userinfo(code)
-
+def _resolve_google_user(userinfo: dict) -> dict:
+    """Find-or-link-or-create a user from Google userinfo. Returns the user dict."""
     user = store.get_user_by_google_sub(redis_client, userinfo["sub"])
     if user is None:
         user = store.get_user_by_email(redis_client, userinfo["email"])
@@ -160,7 +159,13 @@ async def google_callback(code: str):
         else:
             user_id = store.create_user(redis_client, email=userinfo["email"], google_sub=userinfo["sub"])
             user = store.get_user_by_id(redis_client, user_id)
+    return user
 
+
+@router.get("/google/callback")
+async def google_callback(code: str):
+    """Web flow: Google redirects here; we set a cookie and redirect to the app."""
+    user = _resolve_google_user(google_oauth.exchange_code_for_userinfo(code))
     # Set the cookie on the RedirectResponse itself, not on an injected
     # Response param: when a handler *returns* a Response object, FastAPI
     # discards the injected response's headers (incl. Set-Cookie). Setting
@@ -168,6 +173,20 @@ async def google_callback(code: str):
     redirect = RedirectResponse(f"{config.FRONTEND_BASE_URL}/")
     _set_session_cookie(redirect, user["user_id"], user["token_version"])
     return redirect
+
+
+@router.post("/google/token-exchange", response_model=AuthResponse)
+async def google_token_exchange(body: GoogleTokenExchangeSchema):
+    """
+    Native/mobile flow: the app completes Google's consent in a system browser,
+    receives the authorization ``code`` via its ``vaultly://`` deep link, and
+    POSTs it here. Returns the user + ``session_token`` as JSON (no cookie/
+    redirect) — the app stores the token in the OS keychain. Reuses the exact
+    same find-or-link-or-create logic as the web callback.
+    """
+    user = _resolve_google_user(google_oauth.exchange_code_for_userinfo(body.code))
+    token = tokens.create_session_token(user["user_id"], user["token_version"])
+    return _user_out(user, token)
 
 
 # ─── Password reset ─────────────────────────────────────────────────────────
