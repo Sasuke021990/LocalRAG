@@ -1,21 +1,22 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
 import PlanBadge from './PlanBadge.vue'
-import { Vault, LayoutDashboard, MessageSquare, Database, CreditCard, Settings, LogOut, Menu, X } from 'lucide-vue-next'
+import { Vault, LayoutDashboard, MessageSquare, Database, CreditCard, Settings, ShieldCheck, LogOut, Menu, X } from 'lucide-vue-next'
 
 const router = useRouter()
 const auth = useAuthStore()
 const mobileOpen = ref(false)
 
-const links = [
+const links = computed(() => [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/knowledge-base', label: 'Knowledge Base', icon: Database },
   { to: '/billing', label: 'Billing', icon: CreditCard },
   { to: '/settings', label: 'Settings', icon: Settings },
-]
+  ...(auth.user?.is_admin ? [{ to: '/admin', label: 'Admin', icon: ShieldCheck }] : []),
+])
 
 async function logout() {
   await auth.logout()

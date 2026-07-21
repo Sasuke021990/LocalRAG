@@ -55,6 +55,15 @@ class TestAuthorization:
         assert api_client.get("/admin/stats", headers=_auth(admin["token"])).status_code == 200
         assert redis_client.hget(f"user:{admin['user_id']}", "is_admin") == "1"
 
+    def test_me_exposes_is_admin(self, api_client, admin):
+        # The env-admin's /auth/me reports is_admin so the UI can show admin nav.
+        assert api_client.get("/auth/me", headers=_auth(admin["token"])).json()["is_admin"] is True
+
+    def test_me_non_admin_is_false(self, api_client, monkeypatch):
+        monkeypatch.setattr(config, "ADMIN_EMAIL", "root@example.com")
+        _, token = _signup(api_client, "plain@example.com")
+        assert api_client.get("/auth/me", headers=_auth(token)).json()["is_admin"] is False
+
 
 class TestUserManagement:
     def test_list_and_get_user(self, api_client, admin):
