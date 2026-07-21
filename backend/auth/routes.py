@@ -56,6 +56,7 @@ def _user_out(user: dict, token: str) -> AuthResponse:
         email=user["email"],
         storage_used_bytes=user["storage_used_bytes"],
         storage_quota_bytes=user["storage_quota_bytes"],
+        plan=user.get("plan", "free"),
         is_admin=_is_effective_admin(user),
         session_token=token,
     )
@@ -130,6 +131,7 @@ async def me(user_id: str = Depends(require_current_user)):
         email=user["email"],
         storage_used_bytes=user["storage_used_bytes"],
         storage_quota_bytes=user["storage_quota_bytes"],
+        plan=user.get("plan", "free"),
         is_admin=_is_effective_admin(user),
     )
 

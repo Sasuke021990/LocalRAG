@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -30,6 +31,8 @@ from sse_starlette.sse import EventSourceResponse
 
 from admin import routes as admin_routes
 from auth import routes as auth_routes
+from auth import store as auth_store
+from billing import routes as billing_routes
 from auth.dependencies import require_current_user
 from auth.redis_client import redis_client as auth_redis_client
 from integrations import routes as integrations_routes
@@ -77,6 +80,7 @@ app.add_middleware(
 app.include_router(auth_routes.router, prefix="/auth", tags=["Auth"])
 app.include_router(integrations_routes.router, prefix="/integrations", tags=["Integrations"])
 app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
+app.include_router(billing_routes.router, prefix="/billing", tags=["Billing"])
 
 
 # ─── Component initialisation ─────────────────────────────────────────────────
@@ -105,6 +109,27 @@ except Exception as exc:
     logger.error(f"Failed to initialise components: {exc}")
     raise
 
+def _seed_default_admin():
+    """
+    Seed a default admin account so a fresh deployment has someone who can log
+    in and reach the admin panel. Runs only when ``ADMIN_EMAIL`` is set. If
+    ``ADMIN_PASSWORD`` is empty a random one is generated and logged **once**,
+    at creation time — the operator is expected to change it after first login.
+    Idempotent: on later boots the account already exists and nothing changes.
+    """
+    if not config.ADMIN_EMAIL:
+        return
+    password = config.ADMIN_PASSWORD or secrets.token_urlsafe(16)
+    user_id = auth_store.ensure_default_admin(auth_redis_client, config.ADMIN_EMAIL, password)
+    if user_id is not None and not config.ADMIN_PASSWORD:
+        # Only surfaced for a freshly-created account with a generated password.
+        logger.warning(
+            "Seeded default admin '%s' with a GENERATED password: %s — "
+            "log in and change it now (set ADMIN_PASSWORD to silence this).",
+            config.ADMIN_EMAIL, password,
+        )
+
+
 # ─── Startup event ────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_reindex():
@@ -116,6 +141,8 @@ async def startup_reindex():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     count = ingestion_pipeline.reindex_from_disk(str(DATA_DIR))
     logger.info(f"Startup complete — {count} document(s) re-indexed from disk")
+
+    _seed_default_admin()
 
     # Load the local LLM in the background (may download ~1GB on first run) so
     # it never blocks /health. When disabled/unavailable, /query degrades to

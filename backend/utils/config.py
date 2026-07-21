@@ -106,6 +106,11 @@ class Config:
     # treated as an admin (metadata-only admin panel) regardless of their
     # stored is_admin flag. Leave unset to designate no env-level admin.
     ADMIN_EMAIL: str = os.getenv('ADMIN_EMAIL', '')
+    # Optional. If set alongside ADMIN_EMAIL, a default admin account is
+    # seeded on startup (create-if-missing) so there's an admin to log in as
+    # out of the box. If ADMIN_EMAIL is set but this is empty, a random
+    # temporary password is generated and logged once at creation.
+    ADMIN_PASSWORD: str = os.getenv('ADMIN_PASSWORD', '')
 
     # === Google OAuth Configuration ===
     GOOGLE_CLIENT_ID: str = os.getenv('GOOGLE_CLIENT_ID', '')

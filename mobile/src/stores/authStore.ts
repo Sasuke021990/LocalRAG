@@ -8,6 +8,7 @@ interface AuthState {
   user: User | null
   checked: boolean
   hydrate: () => Promise<void>
+  refresh: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   signup: (email: string, password: string) => Promise<void>
   loginWithGoogleCode: (code: string) => Promise<void>
@@ -34,6 +35,14 @@ export const useAuthStore = create<AuthState>((set) => ({
       await clearToken()
       set({ user: null, checked: true })
     }
+  },
+
+  refresh: async () => {
+    // Re-pull /auth/me and re-sync usage (plan + quota) after a change like
+    // a billing plan switch. Keeps the stored token as-is.
+    const user = await authApi.getCurrentUser()
+    useUsageStore.getState().syncFromUser(user)
+    set({ user })
   },
 
   login: async (email, password) => {
