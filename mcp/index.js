@@ -79,9 +79,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (data.sources && data.sources.length > 0) {
         data.sources.forEach((source, index) => {
           const filename = source.file_name || 'Unknown File';
-          const category = source.category || 'none';
+          const pool = source.pool || 'General';
           const score = source.score ? (source.score * 100).toFixed(1) : 'N/A';
-          outputText += `${index + 1}. **${filename}** (Category: ${category}, Score: ${score}%)\n`;
+          outputText += `${index + 1}. **${filename}** (Pool: ${pool}, Score: ${score}%)\n`;
           outputText += `   > "${source.content.substring(0, 150)}..."\n`;
         });
       } else {

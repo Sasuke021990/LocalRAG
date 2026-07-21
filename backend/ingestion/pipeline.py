@@ -5,7 +5,7 @@ Processes documents through the full RAG pipeline:
   parse → chunk → embed → store (Redis + JSON backup) → delete original
 
 Key features:
-- Category-aware storage: /app/data/<category>/<filename>.json
+- Pool-aware storage: <DATA_DIR>/<user_id>/<pool>/<filename>.json
 - Dual storage: Redis (fast retrieval) + JSON backup (durability / portability)
 - Auto re-index on startup: reads all JSON backups and restores to Redis
 - Original file deleted after successful ingestion
@@ -41,15 +41,15 @@ logger = logging.getLogger(__name__)
 
 class DocumentIngestionPipeline:
     """
-    Full RAG ingestion pipeline with category support and dual storage.
+    Full RAG ingestion pipeline with knowledge-pool support and dual storage.
 
     Storage strategy
     ----------------
     After processing a document:
       1. Embeddings + chunks are written to Redis under key
-         ``document:<category>:<filename>``
+         ``document:<user_id>:<pool>:<filename>``
       2. A portable JSON backup is saved at
-         ``/app/data/<category>/<stem>.json``
+         ``<DATA_DIR>/<user_id>/<pool>/<stem>.json``
       3. The original uploaded file is deleted
 
     On container restart the ``reindex_from_disk`` method scans every JSON
@@ -103,7 +103,7 @@ class DocumentIngestionPipeline:
     def reindex_from_disk(self, data_dir: str = "/app/data") -> int:
         """
         Scan every ``*.json`` backup under *data_dir* (now laid out as
-        ``<data_dir>/<user_id>/<category>/<stem>.json``) and restore any
+        ``<data_dir>/<user_id>/<pool>/<stem>.json``) and restore any
         documents missing from Redis. Called automatically on app startup.
 
         This is also the migration path for the RediSearch chunk vector
@@ -126,17 +126,17 @@ class DocumentIngestionPipeline:
             if not user_dir.is_dir():
                 continue
             user_id = user_dir.name
-            for category_dir in user_dir.iterdir():
-                if not category_dir.is_dir():
+            for pool_dir in user_dir.iterdir():
+                if not pool_dir.is_dir():
                     continue
-                category = category_dir.name
-                for json_file in category_dir.glob("*.json"):
+                pool = pool_dir.name
+                for json_file in pool_dir.glob("*.json"):
                     try:
                         with open(json_file, "r", encoding="utf-8") as fh:
                             data = json.load(fh)
 
                         file_name = data.get("file_name", json_file.stem)
-                        doc_key = f"document:{user_id}:{category}:{file_name}"
+                        doc_key = f"document:{user_id}:{pool}:{file_name}"
 
                         if not self.redis_client.exists(doc_key):
                             self.redis_client.set(doc_key, json.dumps(data))
@@ -147,7 +147,7 @@ class DocumentIngestionPipeline:
                         embeddings = data.get("embeddings", [])
                         for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
                             vector_index.index_chunk(
-                                self.redis_client, user_id, category, file_name, i, chunk_text, embedding
+                                self.redis_client, user_id, pool, file_name, i, chunk_text, embedding
                             )
                     except Exception as exc:
                         logger.error(f"Error re-indexing {json_file}: {exc}")
@@ -168,7 +168,8 @@ class DocumentIngestionPipeline:
                 documents.append({
                     "key": key,
                     "file_name": data.get("file_name", "Unknown"),
-                    "category": data.get("category", "General"),
+                    "pool": data.get("pool") or data.get("category") or "General",
+                    "pool_assigned": data.get("pool_assigned", True),
                     "chunk_count": data.get("chunk_count", 0),
                     "processed_at": data.get("processed_at", ""),
                     "embedding_dimension": (
@@ -182,14 +183,14 @@ class DocumentIngestionPipeline:
             logger.error(f"Error listing documents: {exc}")
             return []
 
-    def delete_document(self, file_name: str, category: str, user_id: str) -> Optional[int]:
+    def delete_document(self, file_name: str, pool: str, user_id: str) -> Optional[int]:
         """
         Delete a document from Redis and remove its JSON backup from disk.
         Returns the deleted backup's byte size (for quota accounting), or
         ``None`` if the document didn't exist.
         """
         try:
-            doc_key = f"document:{user_id}:{category}:{file_name}"
+            doc_key = f"document:{user_id}:{pool}:{file_name}"
 
             raw = self.redis_client.get(doc_key)
             if raw is None:
@@ -197,12 +198,12 @@ class DocumentIngestionPipeline:
             chunk_count = json.loads(raw).get("chunk_count", 0)
 
             self.redis_client.delete(doc_key)
-            vector_index.delete_chunks(self.redis_client, user_id, category, file_name, chunk_count)
+            vector_index.delete_chunks(self.redis_client, user_id, pool, file_name, chunk_count)
             logger.info(f"Deleted from Redis: {doc_key} ({chunk_count} chunk(s))")
 
             # Remove JSON backup
             stem = Path(file_name).stem
-            json_path = Path(config.DATA_DIR) / user_id / category / f"{stem}.json"
+            json_path = Path(config.DATA_DIR) / user_id / pool / f"{stem}.json"
             freed_bytes = 0
             if json_path.exists():
                 freed_bytes = json_path.stat().st_size
@@ -213,6 +214,77 @@ class DocumentIngestionPipeline:
         except Exception as exc:
             logger.error(f"Error deleting document '{file_name}': {exc}")
             return None
+
+    def move_document(
+        self, user_id: str, file_name: str, from_pool: str, to_pool: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Move a document from one pool to another (also used to *assign* a
+        doc that was uploaded without a chosen pool — pass ``to_pool ==
+        from_pool`` to just confirm/keep it).
+
+        Re-keys the Redis blob, re-indexes the chunk vectors under the new
+        pool, moves the JSON disk backup, and sets ``pool_assigned=True``.
+        Storage bytes are unchanged (same content, relabeled). Returns the
+        updated document metadata, or ``None`` if the source doc is missing.
+        """
+        try:
+            src_key = f"document:{user_id}:{from_pool}:{file_name}"
+            raw = self.redis_client.get(src_key)
+            if raw is None:
+                return None
+
+            data = json.loads(raw)
+            data["pool"] = to_pool
+            data["pool_assigned"] = True
+            chunks = data.get("chunks", [])
+            embeddings = data.get("embeddings", [])
+            chunk_count = data.get("chunk_count", len(chunks))
+            stem = Path(file_name).stem
+
+            # Assign-in-place (same pool): just flip the flag, no re-keying.
+            if to_pool == from_pool:
+                self.redis_client.set(src_key, json.dumps(data))
+                backup_path = Path(config.DATA_DIR) / user_id / from_pool / f"{stem}.json"
+                if backup_path.exists():
+                    backup_path.write_text(json.dumps(data), encoding="utf-8")
+                return self._doc_meta(src_key, data)
+
+            # Different pool: write new representation, then remove the old.
+            dst_key = f"document:{user_id}:{to_pool}:{file_name}"
+            self.redis_client.set(dst_key, json.dumps(data))
+            for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+                vector_index.index_chunk(self.redis_client, user_id, to_pool, file_name, i, chunk_text, embedding)
+
+            # Move the disk backup.
+            new_dir = Path(config.DATA_DIR) / user_id / to_pool
+            new_dir.mkdir(parents=True, exist_ok=True)
+            (new_dir / f"{stem}.json").write_text(json.dumps(data), encoding="utf-8")
+            old_backup = Path(config.DATA_DIR) / user_id / from_pool / f"{stem}.json"
+            if old_backup.exists():
+                old_backup.unlink()
+
+            # Remove the old Redis blob + chunk vectors.
+            self.redis_client.delete(src_key)
+            vector_index.delete_chunks(self.redis_client, user_id, from_pool, file_name, chunk_count)
+
+            logger.info(f"Moved '{file_name}' for user {user_id}: {from_pool} → {to_pool}")
+            return self._doc_meta(dst_key, data)
+        except Exception as exc:
+            logger.error(f"Error moving document '{file_name}': {exc}")
+            return None
+
+    @staticmethod
+    def _doc_meta(key: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Public metadata view of a document blob (no chunks/embeddings)."""
+        return {
+            "key": key,
+            "file_name": data.get("file_name", "Unknown"),
+            "pool": data.get("pool") or data.get("category") or "General",
+            "pool_assigned": data.get("pool_assigned", True),
+            "chunk_count": data.get("chunk_count", 0),
+            "processed_at": data.get("processed_at", ""),
+        }
 
     # ─────────────────────────────────────────────────────────────────────────
     # Main ingestion method
@@ -225,7 +297,8 @@ class DocumentIngestionPipeline:
         chunk_size: int = 512,
         chunk_overlap: int = 50,
         progress_callback: Optional[Callable[[int, str], None]] = None,
-        category: str = "General",
+        pool: str = "General",
+        pool_assigned: bool = True,
     ) -> Dict[str, Any]:
         """
         Full pipeline: validate → parse → chunk → embed → store → delete original.
@@ -237,12 +310,17 @@ class DocumentIngestionPipeline:
         chunk_size:       Maximum characters per chunk.
         chunk_overlap:    Characters of overlap between consecutive chunks.
         progress_callback: Optional ``(percent: int, message: str) -> None``.
-        category:         Destination category (folder name under /app/data/<user_id>/).
+        pool:             Destination knowledge pool (folder name under
+                          ``<DATA_DIR>/<user_id>/``).
+        pool_assigned:    False when the uploader didn't explicitly pick a
+                          pool (the doc lands in the default pool but is
+                          flagged so the UI can prompt for a choice).
 
         Returns
         -------
         Dict with processing results, including ``stored_bytes`` (the JSON
-        backup's size on disk, used for quota accounting).
+        backup's size on disk, used for quota accounting), ``pool``, and
+        ``pool_assigned``.
         """
         try:
             if not self.validate_file_type(file_path):
@@ -264,10 +342,10 @@ class DocumentIngestionPipeline:
             _cb(progress_callback, 70, "Embeddings generated ✓")
 
             # 4a. Store in Redis
-            self._store_in_redis(file_path, chunks, embeddings, category, user_id)
+            self._store_in_redis(file_path, chunks, embeddings, pool, user_id, pool_assigned)
 
             # 4b. Save JSON backup to disk (durability)
-            stored_bytes = self._save_json_backup(file_path, chunks, embeddings, category, user_id)
+            stored_bytes = self._save_json_backup(file_path, chunks, embeddings, pool, user_id, pool_assigned)
             _cb(progress_callback, 90, "Stored in Redis + JSON backup ✓")
 
             # 5. Delete original uploaded file
@@ -282,7 +360,8 @@ class DocumentIngestionPipeline:
             return {
                 "status": "success",
                 "file_name": Path(file_path).name,
-                "category": category,
+                "pool": pool,
+                "pool_assigned": pool_assigned,
                 "total_chunks": len(chunks),
                 "embedding_dimension": len(embeddings[0]) if embeddings else 0,
                 "stored_bytes": stored_bytes,
@@ -307,15 +386,17 @@ class DocumentIngestionPipeline:
         file_path: str,
         chunks: list,
         embeddings: list,
-        category: str,
+        pool: str,
         user_id: str,
+        pool_assigned: bool = True,
     ) -> None:
-        """Write document data to Redis under ``document:<user_id>:<category>:<filename>``."""
+        """Write document data to Redis under ``document:<user_id>:<pool>:<filename>``."""
         file_name = Path(file_path).name
-        doc_key = f"document:{user_id}:{category}:{file_name}"
+        doc_key = f"document:{user_id}:{pool}:{file_name}"
         data = {
             "file_name": file_name,
-            "category": category,
+            "pool": pool,
+            "pool_assigned": pool_assigned,
             "user_id": user_id,
             "chunks": chunks,
             "embeddings": embeddings,
@@ -325,7 +406,7 @@ class DocumentIngestionPipeline:
         self.redis_client.set(doc_key, json.dumps(data))
 
         for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-            vector_index.index_chunk(self.redis_client, user_id, category, file_name, i, chunk_text, embedding)
+            vector_index.index_chunk(self.redis_client, user_id, pool, file_name, i, chunk_text, embedding)
 
         logger.info(f"Stored in Redis: {doc_key} ({len(chunks)} chunks, vector-indexed)")
 
@@ -334,11 +415,12 @@ class DocumentIngestionPipeline:
         file_path: str,
         chunks: list,
         embeddings: list,
-        category: str,
+        pool: str,
         user_id: str,
+        pool_assigned: bool = True,
     ) -> int:
         """
-        Write a portable JSON backup to ``/app/data/<user_id>/<category>/<stem>.json``.
+        Write a portable JSON backup to ``<DATA_DIR>/<user_id>/<pool>/<stem>.json``.
 
         This file is the source of truth used by ``reindex_from_disk`` on
         container restarts, so the knowledge base survives even if the Redis
@@ -351,13 +433,14 @@ class DocumentIngestionPipeline:
         """
         file_name = Path(file_path).name
         stem = Path(file_path).stem
-        backup_dir = Path(config.DATA_DIR) / user_id / category
+        backup_dir = Path(config.DATA_DIR) / user_id / pool
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup_path = backup_dir / f"{stem}.json"
 
         data = {
             "file_name": file_name,
-            "category": category,
+            "pool": pool,
+            "pool_assigned": pool_assigned,
             "user_id": user_id,
             "chunks": chunks,
             "embeddings": embeddings,

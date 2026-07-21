@@ -2,16 +2,18 @@
 Main FastAPI application — LocalRAG v2.0
 =========================================
 Endpoints:
-  GET  /                         — health / version
-  GET  /health                   — health check
-  GET  /categories               — list all categories
-  POST /categories               — create a new category
-  GET  /documents                — list all indexed documents
-  DELETE /documents/{file_name}  — delete a document
-  POST /upload                   — upload & ingest a document
-  POST /query                    — hybrid search + rerank + cache
-  GET  /progress/{task_id}       — SSE progress stream
-  GET  /docs                     — Swagger UI (auto-generated)
+  GET  /                            — health / version
+  GET  /health                      — health check
+  GET  /pools                       — list knowledge pools (+ doc counts)
+  POST /pools                       — create a new pool
+  DELETE /pools/{name}              — delete an empty pool
+  GET  /documents                   — list all indexed documents
+  DELETE /documents/{file_name}     — delete a document
+  PATCH  /documents/{file_name}/pool — move/assign a document to a pool
+  POST /upload                      — upload & ingest a document into a pool
+  POST /query                       — hybrid search + rerank + cache
+  GET  /progress/{task_id}          — SSE progress stream
+  GET  /docs                        — Swagger UI (auto-generated)
 """
 
 import asyncio
@@ -52,10 +54,10 @@ app = FastAPI(
     title="LocalRAG API",
     description=(
         "A fully local RAG system with hybrid BM25 + vector search, "
-        "cross-encoder re-ranking, semantic caching, and category-aware "
+        "cross-encoder re-ranking, semantic caching, and pool-aware "
         "document management.\n\n"
         "All processed data is stored in Redis (fast retrieval) **and** as "
-        "portable JSON backups under `/app/data/<user_id>/<category>/` (durability)."
+        "portable JSON backups under `<DATA_DIR>/<user_id>/<pool>/` (durability)."
     ),
     version="2.0.0",
     docs_url="/docs",
@@ -125,8 +127,13 @@ class QueryResponse(BaseModel):
     sources: List[Dict[str, Any]]
     processing_time: float
 
-class CategoryCreate(BaseModel):
+class PoolCreate(BaseModel):
     name: str
+
+
+class PoolMove(BaseModel):
+    current_pool: str = "General"
+    new_pool: str
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -147,38 +154,72 @@ async def health_check():
     return {"status": "healthy", "version": "2.0.0"}
 
 
-# ─── Categories ───────────────────────────────────────────────────────────────
+# ─── Pools ─────────────────────────────────────────────────────────────────────
 
-@app.get("/categories", tags=["Categories"], summary="List all document categories")
-async def list_categories(user_id: str = Depends(require_current_user)):
+def _sanitize_pool_name(name: str) -> str:
+    """Strip path-traversal characters from a user-supplied pool name."""
+    return name.strip().replace("/", "_").replace("\\", "_").replace("..", "_")
+
+
+def _pool_document_counts(user_id: str) -> Dict[str, int]:
+    """Map pool name → number of documents in it (from the Redis blobs)."""
+    counts: Dict[str, int] = {}
+    for doc in ingestion_pipeline.list_documents(user_id):
+        counts[doc["pool"]] = counts.get(doc["pool"], 0) + 1
+    return counts
+
+
+@app.get("/pools", tags=["Pools"], summary="List all knowledge pools")
+async def list_pools(user_id: str = Depends(require_current_user)):
     """
-    Returns the names of all category folders that exist under this user's
-    own ``/app/data/<user_id>/`` namespace. Categories are created
-    automatically when a document is uploaded, or explicitly via
-    ``POST /categories``.
+    Returns each of this user's knowledge pools with its document count.
+    Pools are created automatically when a document is uploaded, or
+    explicitly via ``POST /pools``.
     """
     try:
         user_dir = DATA_DIR / user_id
         user_dir.mkdir(parents=True, exist_ok=True)
-        categories = sorted(d.name for d in user_dir.iterdir() if d.is_dir())
-        return {"categories": categories, "total": len(categories)}
+        counts = _pool_document_counts(user_id)
+        names = sorted(set(d.name for d in user_dir.iterdir() if d.is_dir()) | set(counts))
+        pools = [{"name": name, "document_count": counts.get(name, 0)} for name in names]
+        return {"pools": pools, "total": len(pools)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/categories", tags=["Categories"], summary="Create a new category")
-async def create_category(request: CategoryCreate, user_id: str = Depends(require_current_user)):
+@app.post("/pools", tags=["Pools"], summary="Create a new knowledge pool")
+async def create_pool(request: PoolCreate, user_id: str = Depends(require_current_user)):
+    """Creates a new (empty) pool folder under ``<DATA_DIR>/<user_id>/<name>/``."""
+    try:
+        name = _sanitize_pool_name(request.name)
+        if not name:
+            raise HTTPException(status_code=400, detail="Pool name cannot be empty")
+        (DATA_DIR / user_id / name).mkdir(parents=True, exist_ok=True)
+        return {"status": "created", "pool": name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.delete("/pools/{name}", tags=["Pools"], summary="Delete an empty pool")
+async def delete_pool(name: str, user_id: str = Depends(require_current_user)):
     """
-    Creates a new category folder under ``/app/data/<user_id>/<name>/``.
+    Deletes a pool. Refuses (409) if the pool still contains documents —
+    move or delete them first. The default ``General`` pool cannot be
+    deleted.
     """
     try:
-        # Sanitise name — prevent path traversal
-        name = request.name.strip().replace("/", "_").replace("\\", "_").replace("..", "_")
-        if not name:
-            raise HTTPException(status_code=400, detail="Category name cannot be empty")
-        category_dir = DATA_DIR / user_id / name
-        category_dir.mkdir(parents=True, exist_ok=True)
-        return {"status": "created", "category": name}
+        name = _sanitize_pool_name(name)
+        if name == "General":
+            raise HTTPException(status_code=400, detail="The default 'General' pool cannot be deleted")
+        if _pool_document_counts(user_id).get(name, 0) > 0:
+            raise HTTPException(status_code=409, detail="Pool is not empty — move or delete its documents first")
+        pool_dir = DATA_DIR / user_id / name
+        if not pool_dir.exists():
+            raise HTTPException(status_code=404, detail="Pool not found")
+        pool_dir.rmdir()  # empty-only; rmdir refuses a non-empty dir as a safety net
+        return {"status": "deleted", "pool": name}
     except HTTPException:
         raise
     except Exception as exc:
@@ -191,7 +232,8 @@ async def create_category(request: CategoryCreate, user_id: str = Depends(requir
 async def list_documents(user_id: str = Depends(require_current_user)):
     """
     Returns metadata for every document this user has indexed in Redis.
-    Includes file name, category, chunk count, and processing timestamp.
+    Includes file name, pool, whether the pool was explicitly chosen
+    (``pool_assigned``), chunk count, and processing timestamp.
     """
     try:
         docs = ingestion_pipeline.list_documents(user_id)
@@ -204,31 +246,54 @@ async def list_documents(user_id: str = Depends(require_current_user)):
 async def delete_document(
     file_name: str,
     background_tasks: BackgroundTasks,
-    category: str = "General",
+    pool: str = "General",
     user_id: str = Depends(require_current_user),
 ):
     """
     Removes the document from Redis **and** deletes its JSON backup from disk.
-    Pass ``?category=<name>`` to identify the correct document when the same
-    file name exists in multiple categories.
+    Pass ``?pool=<name>`` to identify the correct document when the same
+    file name exists in multiple pools.
     """
     try:
-        freed_bytes = ingestion_pipeline.delete_document(file_name, category, user_id)
+        freed_bytes = ingestion_pipeline.delete_document(file_name, pool, user_id)
         if freed_bytes is None:
             raise HTTPException(status_code=404, detail="Document not found")
         quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed_bytes)
+        hybrid_search.invalidate_bm25(user_id)
         background_tasks.add_task(
             webhooks.dispatch_event,
             auth_redis_client,
             user_id,
             "document.deleted",
-            {"file_name": file_name, "category": category},
+            {"file_name": file_name, "pool": pool},
         )
-        return {"status": "deleted", "file_name": file_name, "category": category}
+        return {"status": "deleted", "file_name": file_name, "pool": pool}
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.patch("/documents/{file_name}/pool", tags=["Documents"], summary="Move/assign a document to a pool")
+async def move_document(
+    file_name: str,
+    request: PoolMove,
+    user_id: str = Depends(require_current_user),
+):
+    """
+    Move a document from ``current_pool`` to ``new_pool`` — also used to
+    *assign* a document that was uploaded without an explicit pool (pass
+    ``new_pool == current_pool`` to keep it where it is and just clear the
+    "needs a pool" flag). Sets ``pool_assigned=true``.
+    """
+    new_pool = _sanitize_pool_name(request.new_pool)
+    if not new_pool:
+        raise HTTPException(status_code=400, detail="new_pool cannot be empty")
+    meta = ingestion_pipeline.move_document(user_id, file_name, request.current_pool, new_pool)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Document not found in the given pool")
+    hybrid_search.invalidate_bm25(user_id)
+    return {"status": "moved", "document": meta}
 
 
 # ─── Upload ───────────────────────────────────────────────────────────────────
@@ -239,17 +304,21 @@ async def upload_document(
     file: UploadFile = File(..., description="Document file to ingest"),
     chunk_size: int = Form(512, description="Characters per chunk"),
     chunk_overlap: int = Form(50, description="Overlap between chunks"),
-    category: str = Form("General", description="Destination category"),
+    pool: str = Form("", description="Destination knowledge pool (blank = default 'General', flagged for the user to assign)"),
     user_id: str = Depends(require_current_user),
 ):
     """
-    Upload a document for ingestion.
+    Upload a document for ingestion into a knowledge pool.
 
     **Flow**:
-    1. File is validated and saved to ``/app/data/<user_id>/<category>/<filename>``
+    1. File is validated and saved to ``<DATA_DIR>/<user_id>/<pool>/<filename>``
     2. Background task: parse → chunk → embed → store → delete original
-    3. JSON backup written to ``/app/data/<user_id>/<category>/<stem>.json``
+    3. JSON backup written to ``<DATA_DIR>/<user_id>/<pool>/<stem>.json``
     4. The original uploaded file is deleted after ingestion
+
+    If ``pool`` is blank the document lands in the default ``General`` pool
+    but is flagged ``pool_assigned=false`` so the UI can prompt the user to
+    keep it there or move it to a chosen pool.
 
     Supported formats: ``.pdf``, ``.docx``, ``.txt``, ``.csv``, ``.md``,
     ``.html``, ``.json``, ``.xml``
@@ -263,8 +332,9 @@ async def upload_document(
                        f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
             )
 
-        # Sanitise category
-        safe_cat = category.strip().replace("/", "_").replace("\\", "_").replace("..", "_") or "General"
+        # Blank pool → default to 'General' but flag it as not explicitly chosen.
+        pool_explicitly_selected = bool(pool.strip())
+        safe_pool = _sanitize_pool_name(pool) or "General"
 
         content = await file.read()
 
@@ -277,9 +347,9 @@ async def upload_document(
         quota.check_upload_allowed(ingestion_pipeline.redis_client, user_id, len(content))
 
         # Ensure directory exists and save file
-        category_dir = DATA_DIR / user_id / safe_cat
-        category_dir.mkdir(parents=True, exist_ok=True)
-        file_path = str(category_dir / file.filename)
+        pool_dir = DATA_DIR / user_id / safe_pool
+        pool_dir.mkdir(parents=True, exist_ok=True)
+        file_path = str(pool_dir / file.filename)
 
         with open(file_path, "wb") as fh:
             fh.write(content)
@@ -295,13 +365,14 @@ async def upload_document(
                     user_id=user_id,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
-                    category=safe_cat,
+                    pool=safe_pool,
+                    pool_assigned=pool_explicitly_selected,
                 )
-                logger.info(f"Processed: {file.filename} → {safe_cat} | {result['total_chunks']} chunks")
+                logger.info(f"Processed: {file.filename} → {safe_pool} | {result['total_chunks']} chunks")
 
                 quota.record_ingested_document(ingestion_pipeline.redis_client, user_id, result["stored_bytes"])
                 if quota.is_over_quota(ingestion_pipeline.redis_client, user_id):
-                    freed = ingestion_pipeline.delete_document(file.filename, safe_cat, user_id)
+                    freed = ingestion_pipeline.delete_document(file.filename, safe_pool, user_id)
                     if freed is not None:
                         quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed)
                     logger.warning(
@@ -309,18 +380,21 @@ async def upload_document(
                     )
                     webhooks.dispatch_event(
                         auth_redis_client, user_id, "document.ingest_failed",
-                        {"file_name": file.filename, "category": safe_cat, "reason": "quota_exceeded"},
+                        {"file_name": file.filename, "pool": safe_pool, "reason": "quota_exceeded"},
                     )
                 else:
+                    # New/changed document set for this user — drop the stale BM25 cache.
+                    hybrid_search.invalidate_bm25(user_id)
                     webhooks.dispatch_event(
                         auth_redis_client, user_id, "document.ingested",
-                        {"file_name": file.filename, "category": safe_cat, "chunk_count": result["total_chunks"]},
+                        {"file_name": file.filename, "pool": safe_pool,
+                         "pool_assigned": pool_explicitly_selected, "chunk_count": result["total_chunks"]},
                     )
             except Exception as exc:
                 logger.error(f"Background processing failed for '{file.filename}': {exc}")
                 webhooks.dispatch_event(
                     auth_redis_client, user_id, "document.ingest_failed",
-                    {"file_name": file.filename, "category": safe_cat, "reason": "processing_error"},
+                    {"file_name": file.filename, "pool": safe_pool, "reason": "processing_error"},
                 )
 
         background_tasks.add_task(_process)
@@ -328,8 +402,9 @@ async def upload_document(
         return {
             "status": "processing_started",
             "filename": file.filename,
-            "category": safe_cat,
-            "message": f"'{file.filename}' queued for ingestion in category '{safe_cat}'",
+            "pool": safe_pool,
+            "pool_assigned": pool_explicitly_selected,
+            "message": f"'{file.filename}' queued for ingestion in pool '{safe_pool}'",
         }
 
     except HTTPException:
@@ -381,7 +456,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         sources = [
             {
                 "file_name":   r.metadata.get("file_name",   "Unknown") if r.metadata else "Unknown",
-                "category":    r.metadata.get("category",    "General") if r.metadata else "General",
+                "pool":        r.metadata.get("pool",        "General") if r.metadata else "General",
                 "chunk_index": r.metadata.get("chunk_index", 0)         if r.metadata else 0,
                 "score":       round(r.score, 4),
                 "content":     r.content,
@@ -396,7 +471,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
             )
         else:
             top_sources = ", ".join(
-                f"{s['file_name']} ({s['category']})" for s in sources[:3]
+                f"{s['file_name']} (pool: {s['pool']})" for s in sources[:3]
             )
             answer = (
                 f"Found {len(sources)} relevant passage(s) for: '{request.query}'\n"
