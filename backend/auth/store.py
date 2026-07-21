@@ -57,6 +57,7 @@ def create_user(redis_client, email: str, password_hash: str = "", google_sub: s
             "token_version": 0,
             "storage_quota_bytes": system_settings.get_default_quota(redis_client),
             "storage_used_bytes": 0,
+            "plan": "free",
             "is_admin": 0,
             "is_active": 1,
         },
@@ -143,3 +144,34 @@ def increment_storage_used(redis_client, user_id: str, delta_bytes: int) -> None
     new_value = redis_client.hincrby(key, "storage_used_bytes", delta_bytes)
     if new_value < 0:
         redis_client.hset(key, "storage_used_bytes", 0)
+
+
+def set_admin(redis_client, user_id: str, is_admin: bool) -> None:
+    redis_client.hset(_user_key(user_id), "is_admin", 1 if is_admin else 0)
+
+
+def ensure_default_admin(redis_client, email: str, password: str) -> Optional[str]:
+    """
+    Seed a default admin account (create-if-missing) so there's an admin to
+    log in as out of the box. Idempotent: if the email already exists, only
+    ensures its ``is_admin`` flag is set (never touches the password). Returns
+    the user_id if a new account was created, else ``None``.
+
+    Import inline to avoid an auth.store → auth.passwords cycle at module load.
+    """
+    from auth import passwords
+
+    if not email:
+        return None
+
+    existing = get_user_by_email(redis_client, email)
+    if existing is not None:
+        if not existing.get("is_admin"):
+            set_admin(redis_client, existing["user_id"], True)
+            logger.info(f"Promoted existing user {existing['user_id']} ({email}) to admin")
+        return None
+
+    user_id = create_user(redis_client, email, password_hash=passwords.hash_password(password))
+    set_admin(redis_client, user_id, True)
+    logger.info(f"Seeded default admin account: {email} (user_id={user_id})")
+    return user_id

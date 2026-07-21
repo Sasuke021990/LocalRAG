@@ -5,6 +5,7 @@ export interface User {
   email: string
   storage_used_bytes: number
   storage_quota_bytes: number
+  plan: string
   is_admin: boolean
   session_token?: string
 }

@@ -1,6 +1,9 @@
 <script setup>
+import { ref } from 'vue'
+import { useAuthStore } from '../stores/auth.js'
 import { useUsageStore } from '../stores/usage.js'
 import { useToastStore } from '../stores/toast.js'
+import * as billingApi from '../api/billing.js'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Badge from '../components/ui/Badge.vue'
@@ -8,18 +11,37 @@ import PlanBadge from '../components/PlanBadge.vue'
 import UsageRing from '../components/UsageRing.vue'
 import { Check } from 'lucide-vue-next'
 
+const auth = useAuthStore()
 const usage = useUsageStore()
 const toast = useToastStore()
 
-// TODO: source real pricing + limits from the billing-backend plan (not yet written).
+// Prices mirror backend/billing/plans.py (a Stripe stub — no real charge).
 const plans = [
   { id: 'free', name: 'Free', price: '$0', period: 'forever', storage: '1 GB', features: ['1 GB storage', 'Unlimited pools', 'Hybrid search + chat', 'API token access'] },
-  { id: 'pro', name: 'Pro', price: '$—', period: 'per month', storage: '25 GB', features: ['25 GB storage', 'Everything in Free', 'Webhooks', 'Priority processing'], highlight: true },
-  { id: 'business', name: 'Business', price: '$—', period: 'per month', storage: '250 GB', features: ['250 GB storage', 'Everything in Pro', 'Team members', 'Audit log'] },
+  { id: 'pro', name: 'Pro', price: '$9', period: 'per month', storage: '25 GB', features: ['25 GB storage', 'Everything in Free', 'Webhooks', 'Priority processing'], highlight: true },
+  { id: 'business', name: 'Business', price: '$29', period: 'per month', storage: '250 GB', features: ['250 GB storage', 'Everything in Pro', 'Team members', 'Audit log'] },
 ]
 
-function upgrade(planId) {
-  toast.push('Upgrades are coming soon!')
+const busy = ref('')  // id of the plan currently being switched to
+
+async function selectPlan(planId) {
+  if (busy.value || planId === usage.plan) return
+  busy.value = planId
+  try {
+    if (planId === 'free') {
+      await billingApi.cancelSubscription()
+    } else {
+      await billingApi.checkout(planId)
+    }
+    // Refresh the user so plan + quota (and the usage ring) reflect the change.
+    await auth.fetchCurrentUser()
+    const name = plans.find((p) => p.id === planId)?.name ?? planId
+    toast.push(planId === 'free' ? 'Switched to the Free plan.' : `You're now on ${name}!`)
+  } catch (err) {
+    toast.push(err.message || 'Could not change plan', 'error')
+  } finally {
+    busy.value = ''
+  }
 }
 </script>
 
@@ -62,11 +84,15 @@ function upgrade(planId) {
           </li>
         </ul>
         <Button v-if="p.id === usage.plan" variant="secondary" block disabled>Current plan</Button>
-        <Button v-else :variant="p.highlight ? 'primary' : 'secondary'" block @click="upgrade(p.id)">
-          Upgrade to {{ p.name }}
+        <Button v-else :variant="p.highlight ? 'primary' : 'secondary'" block
+          :disabled="!!busy" @click="selectPlan(p.id)">
+          <span v-if="busy === p.id">Switching…</span>
+          <span v-else>{{ p.id === 'free' ? 'Downgrade to Free' : `Upgrade to ${p.name}` }}</span>
         </Button>
       </Card>
     </div>
-    <p class="text-xs text-ink-muted text-center">Pro & Business pricing is being finalized — upgrades will open here soon.</p>
+    <p class="text-xs text-ink-muted text-center">
+      Billing is a demo stub — plan changes apply instantly with no real payment.
+    </p>
   </div>
 </template>

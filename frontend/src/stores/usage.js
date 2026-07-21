@@ -4,7 +4,7 @@ export const useUsageStore = defineStore('usage', {
   state: () => ({
     storageUsedBytes: 0,
     storageQuotaBytes: 1,   // avoid divide-by-zero before first sync
-    plan: 'free',           // backend UserOut has no plan field yet — defaults to free
+    plan: 'free',           // from UserOut.plan; defaults to free until first sync
   }),
   getters: {
     percentUsed: (s) => Math.min(100, (s.storageUsedBytes / (s.storageQuotaBytes || 1)) * 100),

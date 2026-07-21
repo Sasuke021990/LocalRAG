@@ -48,4 +48,5 @@ class UserOut(BaseModel):
     email: str
     storage_used_bytes: int
     storage_quota_bytes: int
+    plan: str = "free"
     is_admin: bool = False

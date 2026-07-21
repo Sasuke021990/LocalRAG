@@ -499,6 +499,37 @@ cannot deactivate, demote, or delete them (400).
 - **GET /admin/settings** — Current runtime settings.
 - **PATCH /admin/settings** — Body: `{"name": "signups_enabled", "value": false}` or `{"name": "default_storage_quota_bytes", "value": 2147483648}`. Runtime-mutable settings (take effect immediately, no restart): `signups_enabled` (open/close public registration) and `default_storage_quota_bytes` (quota new signups inherit).
 
+### Default admin account (startup seed)
+On boot, if `ADMIN_EMAIL` is set, Vaultly ensures a matching admin account
+exists (create-if-missing) so a fresh install has someone who can log in
+immediately. Set `ADMIN_PASSWORD` to control that account's password; leave
+it blank and a **random** one is generated and printed to the logs once, at
+creation — log in and change it right away via `POST /auth/change-password`.
+The seed is idempotent: on later boots the account already exists and nothing
+changes (an existing user's password is never overwritten — if that email
+already belongs to a normal user, they're just promoted to admin). Leave
+`ADMIN_EMAIL` blank to seed no account.
+
+---
+
+## 6d. Billing API (Stripe stub)
+
+Vaultly ships a **stub** for Stripe: plan changes take effect immediately and
+**no real payment happens**. The plan catalog and per-plan storage quota live
+in `backend/billing/plans.py`; when real billing lands, that mapping stays and
+only a "payment succeeded" gate is added in front of the plan switch. Every
+endpoint requires a logged-in session or API token.
+
+Plans (stub pricing): **Free** ($0, 1 GB) · **Pro** ($9/mo, 25 GB) ·
+**Business** ($29/mo, 250 GB). A user's `plan` is stored on their account and
+returned by `GET /auth/me`; switching a plan also resets their storage quota to
+that plan's allowance.
+
+- **GET /billing/plans** — List available plans (`id`, `name`, `price_cents`, `quota_bytes`).
+- **GET /billing/subscription** — Current `{plan, quota_bytes}`.
+- **POST /billing/checkout** — Body: `{"plan": "pro"}`. Activates the plan instantly (stub); returns `{status:"activated", stub:true, plan, quota_bytes}`. 400 on an unknown plan.
+- **POST /billing/cancel** — Downgrade to Free.
+
 ---
 
 ## 7. Frontend Guide
@@ -602,6 +633,7 @@ Set these in `.env` (copy from `.env.example`) — `docker-compose.yml` reads th
 | DEFAULT_STORAGE_QUOTA_BYTES | 1073741824 (1 GiB) | Default per-account storage quota |
 | FRONTEND_BASE_URL | http://localhost:3000 | Used to build password-reset links and the post-OAuth-login redirect |
 | ADMIN_EMAIL | (unset) | Email of the operator/admin account — grants access to the metadata-only admin panel (`/admin/*`) |
+| ADMIN_PASSWORD | (unset) | Optional. With `ADMIN_EMAIL` set, seeds a default admin on startup with this password. If blank, a random one is generated and logged once at creation |
 | GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET | (unset) | Optional — enables "Sign in with Google" when both are set |
 | GOOGLE_REDIRECT_URI | http://localhost:3000/api/auth/google/callback | Must match the redirect URI registered in the Google Cloud Console |
 | SMTP_HOST / SMTP_USER / SMTP_PASSWORD | (unset) | Optional — enables password-reset emails when SMTP_HOST is set |
