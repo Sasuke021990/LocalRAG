@@ -32,6 +32,13 @@ class PasswordResetConfirmSchema(BaseModel):
     _check_password = field_validator("new_password")(_validate_password_length)
 
 
+class ChangePasswordSchema(BaseModel):
+    current_password: str
+    new_password: str
+
+    _check_password = field_validator("new_password")(_validate_password_length)
+
+
 class UserOut(BaseModel):
     user_id: str
     email: str

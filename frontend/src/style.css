@@ -1,17 +1,71 @@
 @import "tailwindcss";
 
+/* ─── Vaultly "Vivid Pulse" design tokens (see .plan/04-design-language.md) ─── */
 @theme {
-  --color-primary: #10e8b8;
-  --color-primary-dark: #0ba583;
-  --color-bg-base: #050508;
-  --color-bg-card: rgba(255, 255, 255, 0.03);
-  --color-bg-card-hover: rgba(255, 255, 255, 0.08);
-  --color-text-main: #e2e8f0;
-  --color-text-muted: #94a3b8;
+  /* Surfaces — light, never stark white, never black */
+  --color-canvas: #F6F5FC;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #FBFAFF;
+  --color-border-subtle: #EEECF7;
+
+  /* Accents */
+  --color-indigo: #6366F1;
+  --color-pink: #EC4899;
+  --color-emerald: #10B981;
+  --color-amber: #F59E0B;
+  --color-rose: #F43F5E;
+
+  /* Text */
+  --color-ink: #1E1B2E;
+  --color-ink-soft: #6B6880;
+  --color-ink-muted: #A8A5BD;
+
+  --font-display: "Sora", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --shadow-card: 0 8px 24px rgba(99, 102, 241, 0.08);
+  --shadow-glow: 0 8px 24px rgba(99, 102, 241, 0.28);
 }
 
-body {
-  background-color: var(--color-bg-base);
-  color: var(--color-text-main);
-  font-family: 'Inter', sans-serif;
+html, body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Faint mesh-gradient blobs behind the app canvas */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(40rem 40rem at 12% -8%, rgba(99, 102, 241, 0.10), transparent 60%),
+    radial-gradient(36rem 36rem at 105% 0%, rgba(236, 72, 153, 0.08), transparent 55%);
+  pointer-events: none;
+}
+
+/* Reusable helpers */
+.vaultly-gradient { background-image: linear-gradient(135deg, #6366F1, #EC4899); }
+.vaultly-gradtext {
+  background-image: linear-gradient(135deg, #6366F1, #EC4899);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.font-display { font-family: var(--font-display); }
+.font-mono { font-family: var(--font-mono); }
+
+*:focus-visible {
+  outline: 2px solid var(--color-indigo);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }

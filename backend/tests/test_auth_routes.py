@@ -55,6 +55,37 @@ class TestSignupLoginMe:
         assert resp.json()["session_token"]
 
 
+class TestChangePassword:
+    def test_change_password_success_keeps_session(self, auth_client):
+        auth_client.post("/auth/signup", json={"email": "cp@example.com", "password": "originalpass1"})
+        resp = auth_client.post(
+            "/auth/change-password",
+            json={"current_password": "originalpass1", "new_password": "brandnewpass2"},
+        )
+        assert resp.status_code == 200
+        # Current client stays logged in (re-issued a fresh cookie).
+        assert auth_client.get("/auth/me").status_code == 200
+        # New password works, old one doesn't.
+        auth_client.post("/auth/logout")
+        assert auth_client.post("/auth/login", json={"email": "cp@example.com", "password": "brandnewpass2"}).status_code == 200
+        assert auth_client.post("/auth/login", json={"email": "cp@example.com", "password": "originalpass1"}).status_code == 401
+
+    def test_change_password_wrong_current_400(self, auth_client):
+        auth_client.post("/auth/signup", json={"email": "cp2@example.com", "password": "originalpass1"})
+        resp = auth_client.post(
+            "/auth/change-password",
+            json={"current_password": "wrongcurrent", "new_password": "brandnewpass2"},
+        )
+        assert resp.status_code == 400
+
+    def test_change_password_requires_auth(self, auth_client):
+        resp = auth_client.post(
+            "/auth/change-password",
+            json={"current_password": "x", "new_password": "brandnewpass2"},
+        )
+        assert resp.status_code == 401
+
+
 class TestLogout:
     def test_logout_clears_cookie_then_me_401(self, auth_client):
         auth_client.post("/auth/signup", json={"email": "grace@example.com", "password": "longenough123"})
