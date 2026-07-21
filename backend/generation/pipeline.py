@@ -107,14 +107,14 @@ async def stream_answer(
         return
 
     # 4b. Grounded generation.
-    prompt = grounding.build_grounded_prompt(
-        query, [s["content"] for s in sources], thinking=config.LLM_THINKING_ENABLED,
+    system_prompt = grounding.build_system_prompt(
+        [s["content"] for s in sources], thinking=config.LLM_THINKING_ENABLED,
     )
     splitter = grounding.ThinkingStreamSplitter()
     answer_parts: List[str] = []
     reasoning_parts: List[str] = []
 
-    async for token in llm.generate_stream(prompt):
+    async for token in llm.generate_stream(system_prompt, query):
         for phase, text in splitter.feed(token):
             if phase == "thinking":
                 reasoning_parts.append(text)

@@ -35,7 +35,7 @@ from auth.redis_client import redis_client as auth_redis_client
 from integrations import routes as integrations_routes
 from integrations import webhooks
 from generation import pipeline as answer_pipeline
-from generation.llm import local_llm
+from generation.llm import llm as local_llm
 from ingestion.pipeline import DocumentIngestionPipeline
 from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker

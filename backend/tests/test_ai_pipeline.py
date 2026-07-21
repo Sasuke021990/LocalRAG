@@ -45,7 +45,7 @@ class FakeLLM:
         self.called = False
     @property
     def ready(self): return self._ready
-    async def generate_stream(self, prompt):
+    async def generate_stream(self, system, user):
         self.called = True
         for tok in self.output:   # yield char by char to exercise streaming
             yield tok

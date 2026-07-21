@@ -51,6 +51,18 @@ class TestPromptBuilder:
         p = grounding.build_grounded_prompt("q", [])
         assert "(no passages)" in p
 
+    def test_messages_builder_shape(self):
+        msgs = grounding.build_grounded_messages("what is X?", ["alpha", "beta"])
+        assert [m["role"] for m in msgs] == ["system", "user"]
+        assert "alpha" in msgs[0]["content"] and "beta" in msgs[0]["content"]
+        assert grounding.REFUSAL_MESSAGE in msgs[0]["content"]
+        assert msgs[1]["content"] == "what is X?"
+
+    def test_system_prompt_shared_by_both_builders(self):
+        sys_only = grounding.build_system_prompt(["chunk"])
+        assert sys_only in grounding.build_grounded_prompt("q", ["chunk"])
+        assert grounding.build_grounded_messages("q", ["chunk"])[0]["content"] == sys_only
+
 
 class TestSplitThinking:
     def test_no_think_block_returns_whole_answer(self):

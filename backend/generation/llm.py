@@ -1,34 +1,60 @@
 """
-LocalLLM — a thin, swappable wrapper around a local GGUF model via
-llama-cpp-python.
+LLM backends — a tiny, swappable interface so answer generation can run either
+in-process or against a dedicated inference server.
 
-Design notes
-------------
-- **Optional at runtime.** ``llama_cpp`` and the model file are only touched
-  when ``LLM_ENABLED`` is true *and* the import succeeds. Any failure (library
-  missing, download error, load error) flips ``enabled`` to False and the app
-  degrades to returning ranked passages — it never crashes. This is why the
-  library lives in ``requirements-llm.txt`` (Docker/prod only) rather than the
-  base requirements the tests install.
-- **One shared model for all users.** The model is stateless — it only ever
-  sees the requesting user's own retrieved passages (per-user retrieval
-  happens upstream), so there's no isolation reason to load more than one.
-- **Generations are serialized** behind an ``asyncio.Lock``: a single llama.cpp
-  context is not safe for concurrent generation. Fine at this scale; the
-  interface (``generate_stream``) is deliberately tiny so a later swap to a
-  dedicated inference service (Ollama/vLLM) touches only this class.
+Two backends, chosen by ``LLM_BACKEND``:
+
+- ``embedded`` (``EmbeddedLLM``): a single in-process llama.cpp model, one
+  generation at a time behind an ``asyncio.Lock``. Simple; fine for a homelab
+  or a handful of users. Doesn't scale — every concurrent user queues, and
+  each backend worker would need its own copy of the model.
+
+- ``openai`` (``OpenAICompatibleLLM``): streams from an external
+  OpenAI-compatible server (Ollama / vLLM / TGI / ``llama.cpp --server``) that
+  **batches concurrent requests on a GPU**. No in-process model and no lock, so
+  many users generate at once and the FastAPI backend stays stateless — you can
+  run several workers/replicas, all pointing at the shared inference server.
+  This is the horizontal-scaling path.
+
+Both expose the same ``generate_stream(system, user) -> AsyncIterator[str]`` /
+``ready`` / ``ensure_loaded`` interface, so ``pipeline.py`` never knows which is
+in use. All errors degrade to "no tokens" (the pipeline then falls back to
+ranked passages) — generation never crashes a request.
 """
 
 import asyncio
+import json
 import logging
 from typing import AsyncIterator
 
+import requests
+
+from generation import grounding
 from utils.config import config
 
 logger = logging.getLogger(__name__)
 
 
-class LocalLLM:
+class BaseLLM:
+    enabled = False
+
+    def ensure_loaded(self) -> None:
+        return
+
+    @property
+    def ready(self) -> bool:
+        return False
+
+    async def generate_stream(self, system: str, user: str) -> AsyncIterator[str]:
+        return
+        yield  # pragma: no cover — makes this an async generator
+
+
+class EmbeddedLLM(BaseLLM):
+    """In-process llama.cpp. One generation at a time (llama contexts aren't
+    concurrency-safe). Library + weights are optional (``requirements-llm.txt``)
+    and loaded lazily; any failure disables the LLM rather than crashing."""
+
     def __init__(self):
         self.enabled = bool(config.LLM_ENABLED)
         self._llama = None
@@ -36,11 +62,6 @@ class LocalLLM:
         self._lock = asyncio.Lock()
 
     def ensure_loaded(self) -> None:
-        """
-        Download (once) + load the model. Blocking — call via
-        ``asyncio.to_thread`` from async code. Safe to call repeatedly; on any
-        failure it disables the LLM instead of raising.
-        """
         if not self.enabled or self._loaded:
             return
         try:
@@ -60,9 +81,9 @@ class LocalLLM:
                 verbose=False,
             )
             self._loaded = True
-            logger.info("Local LLM loaded and ready")
+            logger.info("Embedded LLM loaded and ready")
         except Exception as exc:
-            logger.error(f"LLM disabled — could not load model: {exc}")
+            logger.error(f"Embedded LLM disabled — could not load model: {exc}")
             self.enabled = False
             self._llama = None
 
@@ -70,18 +91,12 @@ class LocalLLM:
     def ready(self) -> bool:
         return self.enabled and self._loaded and self._llama is not None
 
-    async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
-        """
-        Yield generated token strings for ``prompt``. Serialized across callers.
-        If the model isn't ready, yields nothing (caller handles the fallback).
-        """
+    async def generate_stream(self, system: str, user: str) -> AsyncIterator[str]:
         if not self.ready:
             return
-
+        prompt = grounding.format_chat_prompt(system, user)
         async with self._lock:
             loop = asyncio.get_event_loop()
-            # llama.cpp streaming is a blocking generator; pump it from a thread
-            # so the event loop stays responsive, handing tokens back via a queue.
             queue: asyncio.Queue = asyncio.Queue()
             _SENTINEL = object()
 
@@ -96,13 +111,12 @@ class LocalLLM:
                         token = chunk["choices"][0]["text"]
                         if token:
                             loop.call_soon_threadsafe(queue.put_nowait, token)
-                except Exception as exc:  # never let a generation error escape
-                    logger.error(f"LLM generation failed: {exc}")
+                except Exception as exc:
+                    logger.error(f"Embedded generation failed: {exc}")
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
             loop.run_in_executor(None, _produce)
-
             while True:
                 item = await queue.get()
                 if item is _SENTINEL:
@@ -110,5 +124,97 @@ class LocalLLM:
                 yield item
 
 
-# Module-level singleton — one shared model for the whole process.
-local_llm = LocalLLM()
+class OpenAICompatibleLLM(BaseLLM):
+    """Streams from an external OpenAI-compatible ``/chat/completions`` server.
+    Concurrency is delegated to that server (which batches); this process only
+    caps how many streams it opens at once via a semaphore."""
+
+    def __init__(self):
+        self.enabled = bool(config.LLM_ENABLED)
+        self._sem = (
+            asyncio.Semaphore(config.LLM_MAX_CONCURRENCY)
+            if config.LLM_MAX_CONCURRENCY and config.LLM_MAX_CONCURRENCY > 0
+            else None
+        )
+
+    def ensure_loaded(self) -> None:
+        # Nothing to download/load — the model lives in the inference server.
+        if self.enabled:
+            logger.info(f"Using OpenAI-compatible LLM backend at {config.LLM_API_BASE} (model={config.LLM_MODEL})")
+
+    @property
+    def ready(self) -> bool:
+        # Assume the server is reachable; a failed stream degrades to fallback.
+        return self.enabled
+
+    async def _acquire(self):
+        if self._sem is not None:
+            await self._sem.acquire()
+
+    def _release(self):
+        if self._sem is not None:
+            self._sem.release()
+
+    async def generate_stream(self, system: str, user: str) -> AsyncIterator[str]:
+        if not self.ready:
+            return
+
+        payload = {
+            "model": config.LLM_MODEL,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "temperature": config.LLM_TEMPERATURE,
+            "max_tokens": config.LLM_MAX_TOKENS,
+            "stream": True,
+        }
+        headers = {"Content-Type": "application/json"}
+        if config.LLM_API_KEY:
+            headers["Authorization"] = f"Bearer {config.LLM_API_KEY}"
+        url = config.LLM_API_BASE.rstrip("/") + "/chat/completions"
+
+        await self._acquire()
+        try:
+            loop = asyncio.get_event_loop()
+            queue: asyncio.Queue = asyncio.Queue()
+            _SENTINEL = object()
+
+            def _produce():
+                try:
+                    resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=120)
+                    resp.raise_for_status()
+                    for raw in resp.iter_lines(decode_unicode=True):
+                        if not raw or not raw.startswith("data:"):
+                            continue
+                        data = raw[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            delta = json.loads(data)["choices"][0].get("delta", {})
+                            token = delta.get("content")
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+                        if token:
+                            loop.call_soon_threadsafe(queue.put_nowait, token)
+                except Exception as exc:
+                    logger.error(f"Inference-server generation failed: {exc}")
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+            loop.run_in_executor(None, _produce)
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                yield item
+        finally:
+            self._release()
+
+
+def get_llm() -> BaseLLM:
+    """Pick the backend from config (``embedded`` by default)."""
+    if config.LLM_BACKEND.strip().lower() == "openai":
+        return OpenAICompatibleLLM()
+    return EmbeddedLLM()
+
+
+# Module-level singleton used by the app.
+llm = get_llm()
