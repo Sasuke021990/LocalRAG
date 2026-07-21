@@ -6,9 +6,10 @@ import { useToastStore } from '../stores/toast.js'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Input from '../components/ui/Input.vue'
-import Badge from '../components/ui/Badge.vue'
 import IconChip from '../components/ui/IconChip.vue'
-import { KeyRound, Webhook, Plug } from 'lucide-vue-next'
+import TokenManager from '../components/TokenManager.vue'
+import WebhookManager from '../components/WebhookManager.vue'
+import { KeyRound, Webhook } from 'lucide-vue-next'
 
 const auth = useAuthStore()
 const toast = useToastStore()
@@ -61,30 +62,28 @@ async function changePassword() {
       </form>
     </Card>
 
-    <!-- Connections (Phase 2 backend exists; UI coming) -->
+    <!-- API tokens -->
     <Card>
       <div class="flex items-center gap-3 mb-5">
-        <IconChip color="pink"><Plug class="w-5 h-5" /></IconChip>
-        <h2 class="font-semibold font-display text-ink">Connections</h2>
-      </div>
-      <div class="flex flex-col divide-y divide-border-subtle">
-        <div class="flex items-center gap-3 py-4">
-          <IconChip color="indigo" size="sm"><KeyRound class="w-4 h-4" /></IconChip>
-          <div class="flex-1">
-            <p class="text-sm font-medium text-ink">MCP / API tokens</p>
-            <p class="text-xs text-ink-soft">Connect Vaultly to any AI client.</p>
-          </div>
-          <Badge color="slate">Coming soon</Badge>
-        </div>
-        <div class="flex items-center gap-3 py-4">
-          <IconChip color="pink" size="sm"><Webhook class="w-4 h-4" /></IconChip>
-          <div class="flex-1">
-            <p class="text-sm font-medium text-ink">Webhooks</p>
-            <p class="text-xs text-ink-soft">Get notified on document events.</p>
-          </div>
-          <Badge color="slate">Coming soon</Badge>
+        <IconChip color="indigo"><KeyRound class="w-5 h-5" /></IconChip>
+        <div>
+          <h2 class="font-semibold font-display text-ink">MCP / API tokens</h2>
+          <p class="text-sm text-ink-soft">Connect Vaultly to any AI client (Claude Desktop, Cursor, …).</p>
         </div>
       </div>
+      <TokenManager />
+    </Card>
+
+    <!-- Webhooks -->
+    <Card>
+      <div class="flex items-center gap-3 mb-5">
+        <IconChip color="pink"><Webhook class="w-5 h-5" /></IconChip>
+        <div>
+          <h2 class="font-semibold font-display text-ink">Webhooks</h2>
+          <p class="text-sm text-ink-soft">Get an HMAC-signed callback on document events.</p>
+        </div>
+      </div>
+      <WebhookManager />
     </Card>
   </div>
 </template>

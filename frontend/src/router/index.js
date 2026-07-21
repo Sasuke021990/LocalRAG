@@ -9,6 +9,7 @@ import ChatPage from '../pages/ChatPage.vue'
 import KnowledgeBasePage from '../pages/KnowledgeBasePage.vue'
 import BillingPage from '../pages/BillingPage.vue'
 import SettingsPage from '../pages/SettingsPage.vue'
+import AdminPage from '../pages/AdminPage.vue'
 
 const routes = [
   { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
@@ -19,6 +20,7 @@ const routes = [
   { path: '/knowledge-base', name: 'knowledge-base', component: KnowledgeBasePage },
   { path: '/billing', name: 'billing', component: BillingPage },
   { path: '/settings', name: 'settings', component: SettingsPage },
+  { path: '/admin', name: 'admin', component: AdminPage, meta: { admin: true } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
@@ -32,6 +34,7 @@ router.beforeEach(async (to) => {
   if (!auth.checked) await auth.fetchCurrentUser()
   if (!to.meta.public && !auth.isAuthenticated) return { name: 'login' }
   if (to.meta.public && auth.isAuthenticated) return { name: 'dashboard' }
+  if (to.meta.admin && !auth.user?.is_admin) return { name: 'dashboard' }
 })
 
 export default router

@@ -44,3 +44,4 @@ class UserOut(BaseModel):
     email: str
     storage_used_bytes: int
     storage_quota_bytes: int
+    is_admin: bool = False
