@@ -1,19 +1,51 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { streamQuery } from '../api/query.js'
+import { fetchDocuments, fetchPools } from '../api/documents.js'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import IconChip from '../components/ui/IconChip.vue'
 import ChatMessage from '../components/ChatMessage.vue'
-import { Sparkles, Send, SlidersHorizontal } from 'lucide-vue-next'
+import { Sparkles, Send } from 'lucide-vue-next'
 
 const query = ref('')
-const topK = ref(10)
-const useReranker = ref(true)
 const history = ref([])
 const loading = ref(false)
-const showControls = ref(false)
 const listEnd = ref(null)
+const documents = ref([])
+const pools = ref([])
+const selectedPool = ref('')   // '' = search across all pools
+
+// Fixed retrieval depth: fetch 40 candidates, rerank, keep the top 20 passages.
+const RETRIEVE_K = 20
+
+// Load the user's documents (for tailored prompts) and pools (for the picker).
+onMounted(async () => {
+  try {
+    documents.value = (await fetchDocuments()).documents || []
+  } catch (_) { /* no docs / not ready — fall back to the generic prompts */ }
+  try {
+    pools.value = (await fetchPools()).pools || []
+  } catch (_) { /* no pools yet — the picker just shows "All pools" */ }
+})
+
+// Quick-start prompt chips, tailored to the selected pool: "Summarise <doc>"
+// for docs in that pool (all pools when none is selected), then a few prompts.
+const suggestions = computed(() => {
+  const pool = selectedPool.value
+  const inScope = pool ? documents.value.filter((d) => d.pool === pool) : documents.value
+  const docChips = inScope.slice(0, 3).map((d) => `Summarise ${d.file_name}`)
+  const generic = pool
+    ? [`Summarise the ${pool} pool`, 'What are the key points?', 'List the pros and cons']
+    : ['What are the key points?', 'Explain in simple terms', 'List the pros and cons']
+  return [...docChips, ...generic].slice(0, 5)
+})
+
+function useSuggestion(text) {
+  if (loading.value) return
+  query.value = text
+  submit()
+}
 
 async function scrollDown() {
   await nextTick()
@@ -26,13 +58,18 @@ function submit() {
   loading.value = true
   query.value = ''
 
-  // Push a plain object we mutate as tokens arrive (Vue deep reactivity).
-  const m = { query: q, answer: '', reasoning: '', sources: [], refused: false, streaming: true, processingTime: undefined }
+  // A reactive object we mutate as tokens arrive. It MUST be reactive():
+  // the stream handlers below mutate `m` directly, and only a reactive proxy
+  // propagates those mutations to the template. A plain object pushed into the
+  // array is exposed to the render as a *separate* reactive proxy, so mutating
+  // the raw object never triggers a re-render and the answer bubble stays empty
+  // while tokens stream in.
+  const m = reactive({ query: q, answer: '', reasoning: '', sources: [], refused: false, streaming: true, processingTime: undefined })
   history.value.push(m)
   const started = performance.now()
   scrollDown()
 
-  streamQuery(q, { topK: useReranker.value ? topK.value * 2 : topK.value, rerankTopK: useReranker.value ? topK.value : 0 }, {
+  streamQuery(q, { topK: RETRIEVE_K * 2, rerankTopK: RETRIEVE_K, pool: selectedPool.value }, {
     onSources: (list) => { m.sources = list },
     onThinking: (t) => { m.reasoning += t; scrollDown() },
     onToken: (t) => { m.answer += t; scrollDown() },
@@ -62,23 +99,21 @@ function submit() {
         <h1 class="text-2xl font-bold font-display text-ink">Chat</h1>
         <p class="text-ink-soft text-sm">Answers come only from your documents.</p>
       </div>
-      <Button variant="ghost" @click="showControls = !showControls">
-        <SlidersHorizontal class="w-4 h-4" /> Retrieval
-      </Button>
-    </div>
-
-    <Card v-if="showControls" class="shrink-0">
-      <div class="flex flex-col sm:flex-row gap-6">
-        <label class="flex-1">
-          <span class="text-sm font-medium text-ink-soft">Passages to retrieve: <span class="font-mono text-indigo">{{ topK }}</span></span>
-          <input type="range" min="3" max="30" v-model.number="topK" class="w-full mt-2 accent-[#6366F1]" />
-        </label>
-        <label class="flex items-center gap-2 text-sm text-ink-soft">
-          <input type="checkbox" v-model="useReranker" class="accent-[#6366F1] w-4 h-4" />
-          Cross-encoder rerank
-        </label>
+      <div class="flex items-center gap-2">
+        <!-- Restrict the model to one knowledge pool (or search across all). -->
+        <label class="text-sm text-ink-soft">Pool</label>
+        <select
+          v-model="selectedPool"
+          title="Which knowledge pool to search"
+          class="rounded-xl border border-border-subtle bg-surface px-3 py-2 text-sm text-ink-soft focus:border-indigo cursor-pointer max-w-48"
+        >
+          <option value="">All pools</option>
+          <option v-for="p in pools" :key="p.name" :value="p.name">
+            {{ p.name }} ({{ p.document_count }})
+          </option>
+        </select>
       </div>
-    </Card>
+    </div>
 
     <div class="flex-1 overflow-y-auto flex flex-col gap-6 pr-1">
       <div v-if="history.length === 0" class="flex flex-col items-center justify-center text-center h-full gap-3">
@@ -89,6 +124,17 @@ function submit() {
 
       <ChatMessage v-for="(m, i) in history" :key="i" v-bind="m" />
       <div ref="listEnd" />
+    </div>
+
+    <!-- Quick-start prompt chips (tailored to the user's documents) -->
+    <div v-if="suggestions.length" class="shrink-0 flex gap-2 overflow-x-auto pb-0.5">
+      <button
+        v-for="(s, i) in suggestions" :key="i"
+        type="button" :disabled="loading" @click="useSuggestion(s)"
+        class="whitespace-nowrap text-xs px-3 py-1.5 rounded-full border border-border-subtle bg-surface text-ink-soft hover:border-indigo hover:text-indigo transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {{ s }}
+      </button>
     </div>
 
     <Card class="shrink-0" :padded="false">

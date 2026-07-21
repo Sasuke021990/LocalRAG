@@ -149,17 +149,43 @@ def build_system_prompt(
 
     return (
         "You are Vaultly's assistant. Answer the user's question using ONLY the "
-        "numbered context passages below, which come from the user's own documents.\n"
-        "Rules:\n"
-        "- Use ONLY the passages. Never use outside or prior knowledge.\n"
-        "- If the message is only a greeting or small talk, reply briefly and "
-        "warmly, then invite them to ask about their documents.\n"
-        f"- If the passages do not contain the answer, reply EXACTLY: \"{OUT_OF_SCOPE_MESSAGE}\"\n"
-        "- Cite the passages you use like [1], [2].\n"
+        "numbered context passages below, which come from the user's own documents.\n\n"
+        "How to write the answer:\n"
+        "- Use clear, simple, everyday language a non-expert can follow. Prefer "
+        "short sentences and plain words over jargon; explain any unavoidable term.\n"
+        "- Format for easy reading with Markdown: short paragraphs, bullet points "
+        "for lists, and **bold** for key terms. Keep it well-organised and concise.\n"
+        "- Get straight to the answer — no filler preamble.\n"
+        "- Cite the passages you draw from inline, like [1], [2].\n\n"
+        "Grounding rules:\n"
+        "- Use ONLY the passages. Never add outside or prior knowledge, and never guess.\n"
+        "- If the message is only a greeting or small talk, reply briefly and warmly, "
+        "then invite them to ask about their documents.\n"
+        "- ONLY IF none of the passages are relevant to the question, reply with "
+        f"exactly this one sentence and nothing else: \"{OUT_OF_SCOPE_MESSAGE}\" "
+        "Never append that sentence to an answer you were able to give.\n"
         f"{reasoning_line}"
         "\nContext passages:\n"
         f"{context}"
     )
+
+
+def strip_trailing_refusal(answer: str) -> str:
+    """
+    Remove a trailing echo of the refusal sentence from an otherwise-real answer.
+
+    Small models sometimes tack the "reply exactly …" instruction onto the end
+    of a genuine answer. This strips that dangling refusal so the user sees only
+    the answer. It is a no-op when the answer *is* a genuine full refusal (the
+    whole message equals the refusal), so real refusals are preserved.
+    """
+    stripped = (answer or "").rstrip()
+    if stripped in (OUT_OF_SCOPE_MESSAGE, NO_RESULTS_MESSAGE):
+        return answer  # a genuine refusal — leave it untouched
+    for msg in (OUT_OF_SCOPE_MESSAGE, NO_RESULTS_MESSAGE):
+        if stripped.endswith(msg):
+            return stripped[: -len(msg)].rstrip()
+    return answer
 
 
 def format_chat_prompt(system: str, user: str) -> str:
