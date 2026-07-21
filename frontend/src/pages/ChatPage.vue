@@ -1,46 +1,57 @@
 <script setup>
 import { ref, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
-import { sendQuery } from '../api/query.js'
+import { streamQuery } from '../api/query.js'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import IconChip from '../components/ui/IconChip.vue'
 import ChatMessage from '../components/ChatMessage.vue'
 import { Sparkles, Send, SlidersHorizontal } from 'lucide-vue-next'
 
-const router = useRouter()
 const query = ref('')
 const topK = ref(10)
 const useReranker = ref(true)
 const history = ref([])
 const loading = ref(false)
-const error = ref('')
 const showControls = ref(false)
 const listEnd = ref(null)
 
-async function submit() {
+async function scrollDown() {
+  await nextTick()
+  listEnd.value?.scrollIntoView({ behavior: 'smooth' })
+}
+
+function submit() {
   const q = query.value.trim()
   if (!q || loading.value) return
-  error.value = ''
   loading.value = true
   query.value = ''
-  try {
-    const rerankTopK = useReranker.value ? topK.value : 0
-    const fetchK = useReranker.value ? topK.value * 2 : topK.value
-    const res = await sendQuery(q, fetchK, rerankTopK)
-    history.value.push({
-      query: q,
-      answer: res.answer || 'No answer generated.',
-      sources: res.sources || [],
-      processingTime: res.processing_time,
-    })
-    await nextTick()
-    listEnd.value?.scrollIntoView({ behavior: 'smooth' })
-  } catch (e) {
-    error.value = e.message || 'Query failed'
-  } finally {
-    loading.value = false
-  }
+
+  // Push a plain object we mutate as tokens arrive (Vue deep reactivity).
+  const m = { query: q, answer: '', reasoning: '', sources: [], refused: false, streaming: true, processingTime: undefined }
+  history.value.push(m)
+  const started = performance.now()
+  scrollDown()
+
+  streamQuery(q, { topK: useReranker.value ? topK.value * 2 : topK.value, rerankTopK: useReranker.value ? topK.value : 0 }, {
+    onSources: (list) => { m.sources = list },
+    onThinking: (t) => { m.reasoning += t; scrollDown() },
+    onToken: (t) => { m.answer += t; scrollDown() },
+    onRefusal: (msg) => { m.answer = msg; m.refused = true },
+    onDone: (data) => {
+      if (data.answer) m.answer = data.answer
+      m.reasoning = data.reasoning || m.reasoning
+      m.refused = data.refused
+      m.streaming = false
+      m.processingTime = data.cached ? 0 : (performance.now() - started) / 1000
+      loading.value = false
+      scrollDown()
+    },
+    onError: (err) => {
+      m.answer = m.answer || `Something went wrong: ${err.message}`
+      m.streaming = false
+      loading.value = false
+    },
+  })
 }
 </script>
 
@@ -69,7 +80,6 @@ async function submit() {
       </div>
     </Card>
 
-    <!-- Conversation -->
     <div class="flex-1 overflow-y-auto flex flex-col gap-6 pr-1">
       <div v-if="history.length === 0" class="flex flex-col items-center justify-center text-center h-full gap-3">
         <IconChip color="pink" size="lg"><Sparkles class="w-6 h-6" /></IconChip>
@@ -78,17 +88,9 @@ async function submit() {
       </div>
 
       <ChatMessage v-for="(m, i) in history" :key="i" v-bind="m" />
-
-      <div v-if="loading" class="flex items-center gap-2 text-sm text-ink-soft">
-        <span class="w-2 h-2 rounded-full bg-pink animate-pulse" />
-        Searching your vault…
-      </div>
       <div ref="listEnd" />
     </div>
 
-    <p v-if="error" class="text-sm text-rose shrink-0">{{ error }}</p>
-
-    <!-- Composer -->
     <Card class="shrink-0" :padded="false">
       <form class="flex items-end gap-2 p-3" @submit.prevent="submit">
         <textarea

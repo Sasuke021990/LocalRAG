@@ -34,6 +34,8 @@ from auth.dependencies import require_current_user
 from auth.redis_client import redis_client as auth_redis_client
 from integrations import routes as integrations_routes
 from integrations import webhooks
+from generation import pipeline as answer_pipeline
+from generation.llm import local_llm
 from ingestion.pipeline import DocumentIngestionPipeline
 from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker
@@ -115,6 +117,12 @@ async def startup_reindex():
     count = ingestion_pipeline.reindex_from_disk(str(DATA_DIR))
     logger.info(f"Startup complete — {count} document(s) re-indexed from disk")
 
+    # Load the local LLM in the background (may download ~1GB on first run) so
+    # it never blocks /health. When disabled/unavailable, /query degrades to
+    # returning ranked passages.
+    if local_llm.enabled:
+        asyncio.create_task(asyncio.to_thread(local_llm.ensure_loaded))
+
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 class QueryRequest(BaseModel):
@@ -126,6 +134,8 @@ class QueryResponse(BaseModel):
     answer: str
     sources: List[Dict[str, Any]]
     processing_time: float
+    reasoning: str = ""
+    refused: bool = False
 
 class PoolCreate(BaseModel):
     name: str
@@ -429,70 +439,49 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
     """
     try:
         start = asyncio.get_event_loop().time()
-
-        # 1. Cache check
-        cached = semantic_cache.get_cached_result(user_id, request.query)
-        if cached and cached.results:
-            return QueryResponse(
-                answer=cached.results[0]["answer"],
-                sources=cached.results[0]["sources"],
-                processing_time=0.0,
-            )
-
-        # 2. Hybrid search
-        logger.info(f"Hybrid search: '{request.query}'")
-        results = hybrid_search.search(user_id, query=request.query, top_k=request.top_k)
-
-        # 3. Re-rank
-        if request.rerank_top_k > 0:
-            logger.info("Re-ranking with cross-encoder …")
-            reranked = reranker.rerank(query=request.query, results=results, top_k=request.rerank_top_k)
-        else:
-            reranked = results
-
-        # 4. Build a structured retrieval summary.
-        # This is a semantic knowledge retrieval system — results are ranked
-        # passages from your documents, not LLM-generated answers.
-        sources = [
-            {
-                "file_name":   r.metadata.get("file_name",   "Unknown") if r.metadata else "Unknown",
-                "pool":        r.metadata.get("pool",        "General") if r.metadata else "General",
-                "chunk_index": r.metadata.get("chunk_index", 0)         if r.metadata else 0,
-                "score":       round(r.score, 4),
-                "content":     r.content,
-            }
-            for r in reranked
-        ]
-
-        if not sources:
-            answer = (
-                f"No relevant passages found for your query: '{request.query}'.\n"
-                "Try uploading documents to your knowledge base first, or rephrase your question."
-            )
-        else:
-            top_sources = ", ".join(
-                f"{s['file_name']} (pool: {s['pool']})" for s in sources[:3]
-            )
-            answer = (
-                f"Found {len(sources)} relevant passage(s) for: '{request.query}'\n"
-                f"Top sources: {top_sources}\n\n"
-                + "\n\n---\n\n".join(
-                    f"**[{i+1}] {s['file_name']}** (score: {s['score']:.4f}, chunk #{s['chunk_index']})\n"
-                    f"{s['content']}"
-                    for i, s in enumerate(sources)
-                )
-            )
-
-        processing_time = asyncio.get_event_loop().time() - start
-
-        # 5. Cache result
-        semantic_cache.set_cached_result(user_id, request.query, [{"answer": answer, "sources": sources}])
-
-        return QueryResponse(answer=answer, sources=sources, processing_time=processing_time)
-
+        result = await answer_pipeline.answer_query(
+            user_id=user_id, query=request.query,
+            top_k=request.top_k, rerank_top_k=request.rerank_top_k,
+            hybrid_search=hybrid_search, reranker=reranker,
+            semantic_cache=semantic_cache, llm=local_llm,
+        )
+        return QueryResponse(
+            answer=result["answer"],
+            sources=result["sources"],
+            processing_time=asyncio.get_event_loop().time() - start,
+            reasoning=result.get("reasoning", ""),
+            refused=result.get("refused", False),
+        )
     except Exception as exc:
         logger.error(f"Query error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/query/stream", tags=["Search"], summary="Streaming grounded AI answer (SSE)")
+async def query_stream(request: QueryRequest, user_id: str = Depends(require_current_user)):
+    """
+    Server-Sent Events version of ``/query`` that streams a grounded AI answer.
+
+    Event sequence: ``sources`` (once) → ``thinking``* (only when thinking is
+    enabled) → ``token``* → ``done``. If the refusal gate trips, it's
+    ``sources`` → ``refusal`` → ``done`` and the model is never called.
+    """
+    async def _events():
+        try:
+            async for event, data in answer_pipeline.stream_answer(
+                user_id=user_id, query=request.query,
+                top_k=request.top_k, rerank_top_k=request.rerank_top_k,
+                hybrid_search=hybrid_search, reranker=reranker,
+                semantic_cache=semantic_cache, llm=local_llm,
+            ):
+                # JSON-encode every payload (even token strings) so the client
+                # parses uniformly and newlines never break SSE framing.
+                yield {"event": event, "data": json.dumps(data)}
+        except Exception as exc:
+            logger.error(f"Query stream error: {exc}")
+            yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
+
+    return EventSourceResponse(_events())
 
 
 # ─── SSE progress stream ──────────────────────────────────────────────────────

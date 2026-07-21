@@ -45,10 +45,23 @@ services:
       - SMTP_USE_TLS=${SMTP_USE_TLS:-True}
       - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
       - WEBHOOK_TIMEOUT_SECONDS=${WEBHOOK_TIMEOUT_SECONDS:-5}
+      # Local AI answers (grounded LLM). Off by default — flip LLM_ENABLED=true
+      # and the model downloads once (~1GB) into the models volume on startup.
+      - LLM_ENABLED=${LLM_ENABLED:-False}
+      - LLM_MODEL_REPO=${LLM_MODEL_REPO:-Qwen/Qwen2.5-1.5B-Instruct-GGUF}
+      - LLM_MODEL_FILE=${LLM_MODEL_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}
+      - LLM_THINKING_ENABLED=${LLM_THINKING_ENABLED:-False}
+      - LLM_CONTEXT_SIZE=${LLM_CONTEXT_SIZE:-4096}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-512}
+      - LLM_THREADS=${LLM_THREADS:-0}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      - LLM_MIN_RELEVANCE_SCORE=${LLM_MIN_RELEVANCE_SCORE:-0.0}
     volumes:
       # Mount the knowledge base directory for file storage — set
       # KNOWLEDGE_DATA_PATH in .env (copy .env.example), defaults to ./data
       - ${KNOWLEDGE_DATA_PATH:-./data}:/app/data
+      # Persist downloaded LLM weights across container rebuilds (~1GB).
+      - models_data:/app/models
       # Mount WSL library for AMD DirectML support on Windows
       - /usr/lib/wsl:/usr/lib/wsl
     # GPU Acceleration Setup:
@@ -82,3 +95,4 @@ services:
 
 volumes:
   redis_data:
+  models_data:

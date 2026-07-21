@@ -50,6 +50,28 @@ class Config:
     # === ROCm Configuration ===
     USE_ROCM: bool = os.getenv('USE_ROCM', 'True').lower() == 'true'
 
+    # === Local AI Answer Generation (grounded LLM) ===
+    # Master switch. Off by default so CI / low-RAM installs don't download or
+    # load a model — when off, /query falls back to returning ranked passages.
+    LLM_ENABLED: bool = os.getenv('LLM_ENABLED', 'False').lower() == 'true'
+    # The model — any GGUF under your RAM budget. Repo + file are all you change
+    # to swap models (downloaded once from HuggingFace into LLM_MODELS_DIR).
+    LLM_MODEL_REPO: str = os.getenv('LLM_MODEL_REPO', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF')
+    LLM_MODEL_FILE: str = os.getenv('LLM_MODEL_FILE', 'qwen2.5-1.5b-instruct-q4_k_m.gguf')
+    LLM_MODELS_DIR: str = os.getenv('LLM_MODELS_DIR', '/app/models')
+    # Reasoning: when True the model thinks inside a <think></think> block
+    # before the final answer (best with a thinking-capable model). The UI
+    # shows that reasoning in a separate collapsible section.
+    LLM_THINKING_ENABLED: bool = os.getenv('LLM_THINKING_ENABLED', 'False').lower() == 'true'
+    LLM_CONTEXT_SIZE: int = int(os.getenv('LLM_CONTEXT_SIZE', 4096))
+    LLM_MAX_TOKENS: int = int(os.getenv('LLM_MAX_TOKENS', 512))
+    LLM_THREADS: int = int(os.getenv('LLM_THREADS', 0))  # 0 = llama.cpp auto
+    LLM_TEMPERATURE: float = float(os.getenv('LLM_TEMPERATURE', 0.0))  # 0 = deterministic grounding
+    # Refusal gate: if the top reranked relevance score is below this, the model
+    # is never called and the fixed refusal message is returned. Tune upward if
+    # you see the model answering from thin context.
+    LLM_MIN_RELEVANCE_SCORE: float = float(os.getenv('LLM_MIN_RELEVANCE_SCORE', 0.0))
+
     # === Security Configuration ===
     CORS_ALLOWED_ORIGINS_LIST: list = [
         origin.strip()

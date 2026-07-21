@@ -311,10 +311,10 @@ Response: {
 NOTE: Processing is asynchronous. Poll GET /documents to confirm completion.
 
 ### POST /query
-Search the knowledge base.
+Search the knowledge base and (when `LLM_ENABLED=true`) generate a grounded answer.
 Body: {"query": "What is the refund policy?", "top_k": 10, "rerank_top_k": 5}
 Response: {
-  "answer": "Based on the retrieved documents...",
+  "answer": "The refund policy allows returns within 30 days [1]...",
   "sources": [{
     "file_name": "policy.pdf",
     "pool": "General",
@@ -322,13 +322,57 @@ Response: {
     "score": 0.9823,
     "content": "The refund policy states..."
   }],
-  "processing_time": 0.342
+  "processing_time": 0.342,
+  "reasoning": "",
+  "refused": false
 }
 
-If query was found in semantic cache, processing_time will be 0.0.
+`refused: true` (with the fixed refusal message as `answer`) means the retrieval
+gate found nothing relevant enough, so the model was never called. `reasoning`
+is non-empty only when `LLM_THINKING_ENABLED=true`. When the LLM is disabled the
+`answer` is a ranked-passage summary (the pre-AI behavior). Cache hits return
+`processing_time: 0.0`.
+
+### POST /query/stream
+Streaming (SSE) version of `/query`. Same body. Emits events in order:
+`sources` (once) → `thinking`* (only if thinking enabled) → `token`* → `done`;
+or `sources` → `refusal` → `done` when gated out. Each event's `data` is JSON.
 
 ### GET /progress/{task_id}
 Server-Sent Events stream for background task progress.
+
+---
+
+## 6c. AI Answers (grounded, local)
+
+When `LLM_ENABLED=true`, Vaultly generates answers with a small local model
+(default Qwen2.5-1.5B-Instruct GGUF, ~1 GB) — **no external API calls, ever**.
+
+**Grounding contract.** The model is instructed to answer *only* from the
+user's own retrieved passages and to refuse otherwise. No LLM can be
+mathematically forced to ignore its training, so enforcement is layered and the
+intended failure mode is **refusal, not hallucination**:
+1. A **refusal gate runs before the model** — empty retrieval or a top score
+   below `LLM_MIN_RELEVANCE_SCORE` returns the fixed refusal and skips generation.
+2. A **hard system prompt** constrains the model to the numbered passages, with
+   deterministic decoding (temperature 0 by default).
+3. **Citations** (the exact passages given to the model) are always returned.
+
+Borderline-relevant context can still be paraphrased beyond the passages by a
+sub-2B model; the mitigation is the conservative, tunable gate — not a guarantee.
+
+**One model, all users.** The model is stateless and only ever sees the
+requesting user's own passages (retrieval is per-user), so a single shared
+instance is safe; generations are serialized behind a lock.
+
+**Thinking mode** (`LLM_THINKING_ENABLED=true`): the model reasons inside a
+`<think></think>` block first; the reasoning is returned separately (`reasoning`
+field / `thinking` SSE events) and shown in a collapsible section in the UI.
+Works best with a thinking-capable GGUF (e.g. a Qwen3 model).
+
+**Swapping models**: set `LLM_MODEL_REPO` + `LLM_MODEL_FILE` to any GGUF that
+fits your RAM (allow ~2.5 GB headroom for the default). Weights persist in the
+`models` volume.
 
 ---
 
@@ -537,6 +581,11 @@ Set these in `.env` (copy from `.env.example`) — `docker-compose.yml` reads th
 | SEMANTIC_CACHE_SIMILARITY_THRESHOLD | 0.92 | Minimum cosine similarity for a semantic cache hit |
 | WEBHOOK_MAX_RETRIES | 3 | Delivery attempts per webhook event before giving up |
 | WEBHOOK_TIMEOUT_SECONDS | 5 | Per-attempt HTTP timeout for webhook delivery |
+| LLM_ENABLED | False | Master switch for local AI answer generation |
+| LLM_MODEL_REPO / LLM_MODEL_FILE | Qwen2.5-1.5B-Instruct GGUF (Q4_K_M) | The model — any GGUF under your RAM budget; downloaded once |
+| LLM_THINKING_ENABLED | False | Model reasons in a `<think>` block before answering (shown separately in the UI) |
+| LLM_MIN_RELEVANCE_SCORE | 0.0 | Refusal-gate threshold — below this the model isn't called |
+| LLM_CONTEXT_SIZE / LLM_MAX_TOKENS / LLM_THREADS / LLM_TEMPERATURE | 4096 / 512 / auto / 0.0 | Generation tuning |
 
 ### Embedding Model
 Default: all-MiniLM-L6-v2 (384-dim, ~80MB, fast)
