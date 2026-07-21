@@ -374,6 +374,35 @@ Works best with a thinking-capable GGUF (e.g. a Qwen3 model).
 fits your RAM (allow ~2.5 GB headroom for the default). Weights persist in the
 `models` volume.
 
+### Scaling generation (`LLM_BACKEND`)
+
+Two backends produce the answer — pick with `LLM_BACKEND`:
+
+- **`embedded`** (default): one in-process llama.cpp model, **one generation at
+  a time** behind a lock. Simple and self-contained; fine for a homelab or a
+  few users. Under real concurrency, requests **queue** (they don't fail or mix
+  up — they just wait), and every backend worker would need its own copy of the
+  model, so it doesn't scale horizontally.
+
+- **`openai`**: stream from an external **OpenAI-compatible inference server**
+  (Ollama, vLLM, TGI, or `llama.cpp --server`) that **batches concurrent
+  requests on a GPU**. There's no in-process model and no lock, so many users
+  generate at once and the FastAPI backend is stateless — you can run several
+  replicas behind the same inference server. This is the scaling path.
+
+  Config: `LLM_API_BASE` (e.g. `http://ollama:11434/v1` or
+  `http://vllm:8000/v1`), `LLM_MODEL` (the served model name), optional
+  `LLM_API_KEY`, and `LLM_MAX_CONCURRENCY` (cap the streams this process opens
+  at once). Everything else — the grounding contract, refusal gate, thinking
+  mode, citations — is identical across both backends.
+
+  Example (Ollama): run `ollama serve` with `ollama pull qwen2.5:1.5b-instruct`,
+  then set `LLM_ENABLED=true`, `LLM_BACKEND=openai`,
+  `LLM_API_BASE=http://<host>:11434/v1`, `LLM_MODEL=qwen2.5:1.5b-instruct`.
+
+If the inference server is unreachable, generation degrades to the ranked-passage
+fallback (same as when the LLM is disabled) — it never errors the request.
+
 ---
 
 ## 6a. Integrations API (MCP/API tokens + webhooks)

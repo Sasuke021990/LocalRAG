@@ -48,6 +48,11 @@ services:
       # Local AI answers (grounded LLM). Off by default — flip LLM_ENABLED=true
       # and the model downloads once (~1GB) into the models volume on startup.
       - LLM_ENABLED=${LLM_ENABLED:-False}
+      - LLM_BACKEND=${LLM_BACKEND:-embedded}
+      - LLM_API_BASE=${LLM_API_BASE:-http://localhost:11434/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b-instruct}
+      - LLM_MAX_CONCURRENCY=${LLM_MAX_CONCURRENCY:-8}
       - LLM_MODEL_REPO=${LLM_MODEL_REPO:-Qwen/Qwen2.5-1.5B-Instruct-GGUF}
       - LLM_MODEL_FILE=${LLM_MODEL_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}
       - LLM_THINKING_ENABLED=${LLM_THINKING_ENABLED:-False}

@@ -69,17 +69,17 @@ def _truncate_to_budget(chunks: List[str], char_budget: int) -> List[str]:
     return out
 
 
-def build_grounded_prompt(
-    query: str,
+def build_system_prompt(
     chunks: List[str],
     thinking: bool = False,
     char_budget: int = 8000,
 ) -> str:
     """
-    Build a Qwen-style chat prompt that constrains the model to the given
-    context passages and instructs it to refuse if they don't answer the
-    question. When ``thinking`` is True the model is asked to reason inside a
-    ``<think>…</think>`` block before the final answer (see ``split_thinking``).
+    Backend-neutral system instruction: constrains the model to the numbered
+    context passages and tells it to refuse if they don't contain the answer.
+    Used by both the embedded (raw-prompt) and the OpenAI-compatible (chat
+    messages) backends. When ``thinking`` is True the model is asked to reason
+    inside a ``<think>…</think>`` block first (see ``split_thinking``).
     """
     kept = _truncate_to_budget(chunks, char_budget)
     context = "\n\n".join(f"[{i + 1}] {c}" for i, c in enumerate(kept)) or "(no passages)"
@@ -90,7 +90,7 @@ def build_grounded_prompt(
         else ""
     )
 
-    system = (
+    return (
         "You are Vaultly's assistant. Answer the user's question using ONLY the "
         "numbered context passages below, which come from the user's own documents.\n"
         "Rules:\n"
@@ -102,11 +102,37 @@ def build_grounded_prompt(
         f"{context}"
     )
 
+
+def format_chat_prompt(system: str, user: str) -> str:
+    """Wrap a system + user message in the Qwen chat template (embedded backend)."""
     return (
         f"<|im_start|>system\n{system}<|im_end|>\n"
-        f"<|im_start|>user\n{query}<|im_end|>\n"
+        f"<|im_start|>user\n{user}<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
+
+
+def build_grounded_prompt(
+    query: str,
+    chunks: List[str],
+    thinking: bool = False,
+    char_budget: int = 8000,
+) -> str:
+    """Qwen-template raw prompt string for the embedded (completion) backend."""
+    return format_chat_prompt(build_system_prompt(chunks, thinking, char_budget), query)
+
+
+def build_grounded_messages(
+    query: str,
+    chunks: List[str],
+    thinking: bool = False,
+    char_budget: int = 8000,
+) -> List[dict]:
+    """OpenAI-style chat messages for the inference-server backend."""
+    return [
+        {"role": "system", "content": build_system_prompt(chunks, thinking, char_budget)},
+        {"role": "user", "content": query},
+    ]
 
 
 def split_thinking(text: str) -> Tuple[str, str]:

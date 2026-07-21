@@ -54,6 +54,21 @@ class Config:
     # Master switch. Off by default so CI / low-RAM installs don't download or
     # load a model — when off, /query falls back to returning ranked passages.
     LLM_ENABLED: bool = os.getenv('LLM_ENABLED', 'False').lower() == 'true'
+    # Backend that actually generates:
+    #   "embedded" — in-process llama.cpp, one generation at a time (a single
+    #                shared model; fine for a homelab / a few users).
+    #   "openai"   — stream from an external OpenAI-compatible inference server
+    #                (Ollama / vLLM / TGI / llama.cpp --server) that batches
+    #                concurrent requests — the horizontal-scaling path. No
+    #                in-process model or lock, so backend workers stay stateless.
+    LLM_BACKEND: str = os.getenv('LLM_BACKEND', 'embedded')
+    # openai backend only: base URL (…/v1), optional key, and the served model.
+    LLM_API_BASE: str = os.getenv('LLM_API_BASE', 'http://localhost:11434/v1')
+    LLM_API_KEY: str = os.getenv('LLM_API_KEY', '')
+    LLM_MODEL: str = os.getenv('LLM_MODEL', 'qwen2.5:1.5b-instruct')
+    # openai backend only: cap simultaneous in-flight generations from this
+    # process to protect the inference server (0 = unlimited).
+    LLM_MAX_CONCURRENCY: int = int(os.getenv('LLM_MAX_CONCURRENCY', 8))
     # The model — any GGUF under your RAM budget. Repo + file are all you change
     # to swap models (downloaded once from HuggingFace into LLM_MODELS_DIR).
     LLM_MODEL_REPO: str = os.getenv('LLM_MODEL_REPO', 'Qwen/Qwen2.5-1.5B-Instruct-GGUF')
