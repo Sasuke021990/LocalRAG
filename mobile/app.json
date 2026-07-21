@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Vaultly",
+    "slug": "vaultly",
+    "scheme": "vaultly",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#F6F5FC"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vaultly.app"
+    },
+    "android": {
+      "package": "com.vaultly.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#F6F5FC"
+      }
+    },
+    "plugins": ["expo-secure-store", "expo-font"],
+    "extra": {
+      "apiBaseUrl": "https://api.vaultly.app"
+    }
+  }
+}

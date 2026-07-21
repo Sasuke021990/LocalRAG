@@ -137,6 +137,27 @@ class TestGoogleCallback:
         assert relinked["user_id"] == existing["user_id"]
         assert relinked["password_hash"]  # original password preserved
 
+    def test_token_exchange_returns_session_token_json(self, auth_client, redis_client, monkeypatch):
+        """Native flow: POST a code, get user + session_token as JSON (no redirect)."""
+        monkeypatch.setattr(
+            google_oauth, "exchange_code_for_userinfo",
+            lambda code: {"sub": "google-sub-mobile", "email": "mobile@example.com"},
+        )
+        resp = auth_client.post("/auth/google/token-exchange", json={"code": "auth-code"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["email"] == "mobile@example.com"
+        assert body["session_token"]
+
+        # The returned bearer token authenticates /auth/me with no cookie.
+        auth_client.cookies.clear()
+        me = auth_client.get("/auth/me", headers={"Authorization": f"Bearer {body['session_token']}"})
+        assert me.status_code == 200
+        assert me.json()["email"] == "mobile@example.com"
+
+    def test_token_exchange_missing_code_422(self, auth_client):
+        assert auth_client.post("/auth/google/token-exchange", json={}).status_code == 422
+
     def test_creates_new_user_for_unseen_email(self, auth_client, redis_client, monkeypatch):
         monkeypatch.setattr(
             google_oauth, "exchange_code_for_userinfo",
