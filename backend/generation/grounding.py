@@ -22,12 +22,69 @@ final answer.
 import re
 from typing import Any, List, Tuple
 
-REFUSAL_MESSAGE = (
-    "I couldn't find anything about this in your documents. "
+# Shown when retrieval comes back empty — nothing in the knowledge base matched.
+NO_RESULTS_MESSAGE = (
+    "I couldn't find anything about that in your documents or knowledge pools. "
     "Try uploading relevant files or rephrasing your question."
 )
 
+# Shown when the user asks something the retrieved passages don't cover — the
+# grounded assistant has no world knowledge of its own to fall back on. Also
+# the exact string the model is told to emit when the passages don't answer.
+OUT_OF_SCOPE_MESSAGE = (
+    "I can only answer using your documents and knowledge pools — "
+    "I don't have knowledge beyond them."
+)
+
+# Back-compat alias: existing callers/tests import ``REFUSAL_MESSAGE`` and the
+# grounded system prompt tells the model to reply with this exact string when
+# the passages don't contain the answer.
+REFUSAL_MESSAGE = OUT_OF_SCOPE_MESSAGE
+
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+# Matches only when the *entire* message is a greeting / thanks / small-talk /
+# capability question — so "hi" greets, but "hi, what does doc 3 say?" still
+# goes through retrieval. Anchored at both ends; trailing punctuation allowed.
+_GREETING_RE = re.compile(
+    r"^\s*(?:"
+    r"hi+|hey+|hello+|yo+|hiya|heya|howdy|"
+    r"good\s*(?:morning|afternoon|evening|day)|greetings|"
+    r"thanks(?:\s*a\s*lot)?|thank\s*you|thanx|thx|ty|cheers|"
+    r"bye|goodbye|see\s*ya|see\s*you|"
+    r"how\s*(?:are|r)\s*(?:you|u)(?:\s*doing)?|how'?s\s*it\s*going|"
+    r"what'?s\s*up|wass?up|sup|"
+    r"who\s*(?:are|r)\s*(?:you|u)|what\s*(?:can|do)\s*you\s*do|help"
+    r")[\s!.,?'\"-]*$",
+    re.IGNORECASE,
+)
+
+
+def is_greeting(query: str) -> bool:
+    """True if the whole message is a greeting / thanks / small-talk / 'who are
+    you' — cases the assistant should answer conversationally rather than treat
+    as a document lookup."""
+    return bool(_GREETING_RE.match(query or ""))
+
+
+def greeting_response(query: str) -> str:
+    """A short, friendly canned reply for a greeting/small-talk message. Canned
+    (not model-generated) so it's instant, deterministic, and works even when
+    the LLM is disabled — and always steers the user back to their documents."""
+    q = (query or "").strip().lower()
+    if q.startswith(("thank", "thanx", "thx", "ty", "cheers")):
+        return "You're welcome! Ask me anything about your documents or knowledge pools."
+    if q.startswith(("bye", "goodbye", "see ya", "see you")):
+        return "Goodbye! Come back anytime you need answers from your knowledge base."
+    if "who are you" in q or "who r you" in q or "what can you do" in q or "what do you do" in q or q == "help":
+        return (
+            "I'm Vaultly's assistant. I answer questions using only your uploaded "
+            "documents and knowledge pools — ask me about anything you've added."
+        )
+    return (
+        "Hi! 👋 I'm Vaultly's assistant. Ask me anything about your documents "
+        "and knowledge pools."
+    )
 
 
 def passes_relevance_gate(reranked_results: List[Any], threshold: float) -> bool:
@@ -95,7 +152,9 @@ def build_system_prompt(
         "numbered context passages below, which come from the user's own documents.\n"
         "Rules:\n"
         "- Use ONLY the passages. Never use outside or prior knowledge.\n"
-        f"- If the passages do not contain the answer, reply EXACTLY: \"{REFUSAL_MESSAGE}\"\n"
+        "- If the message is only a greeting or small talk, reply briefly and "
+        "warmly, then invite them to ask about their documents.\n"
+        f"- If the passages do not contain the answer, reply EXACTLY: \"{OUT_OF_SCOPE_MESSAGE}\"\n"
         "- Cite the passages you use like [1], [2].\n"
         f"{reasoning_line}"
         "\nContext passages:\n"
