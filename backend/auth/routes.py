@@ -10,6 +10,7 @@ from auth import email_service, google_oauth, passwords, store, tokens
 from auth.dependencies import require_current_user
 from auth.redis_client import redis_client
 from auth.schemas import (
+    ChangePasswordSchema,
     LoginRequest,
     PasswordResetConfirmSchema,
     PasswordResetRequestSchema,
@@ -83,6 +84,31 @@ async def logout(response: Response):
     """No auth required — logging out when already logged out is a safe no-op."""
     response.delete_cookie(tokens.SESSION_COOKIE_NAME)
     return {"status": "logged_out"}
+
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordSchema,
+    response: Response,
+    user_id: str = Depends(require_current_user),
+):
+    """
+    Change the signed-in user's password. Verifies the current password,
+    then sets the new one and bumps token_version — which invalidates every
+    *other* existing session. The current client is re-issued a fresh
+    session cookie carrying the new token_version, so it stays logged in.
+    """
+    user = store.get_user_by_id(redis_client, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    if not user["password_hash"] or not passwords.verify_password(body.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    store.set_password(redis_client, user_id, passwords.hash_password(body.new_password))
+    store.bump_token_version(redis_client, user_id)
+    new_version = user["token_version"] + 1
+    _set_session_cookie(response, user_id, new_version)
+    return {"status": "password_updated"}
 
 
 @router.get("/me", response_model=UserOut)

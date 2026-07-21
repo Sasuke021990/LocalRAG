@@ -1,0 +1,80 @@
+<script setup>
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '../stores/auth.js'
+import PlanBadge from './PlanBadge.vue'
+import { Vault, LayoutDashboard, MessageSquare, Database, CreditCard, Settings, LogOut, Menu, X } from 'lucide-vue-next'
+
+const router = useRouter()
+const auth = useAuthStore()
+const mobileOpen = ref(false)
+
+const links = [
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/chat', label: 'Chat', icon: MessageSquare },
+  { to: '/knowledge-base', label: 'Knowledge Base', icon: Database },
+  { to: '/billing', label: 'Billing', icon: CreditCard },
+  { to: '/settings', label: 'Settings', icon: Settings },
+]
+
+async function logout() {
+  await auth.logout()
+  router.push('/login')
+}
+</script>
+
+<template>
+  <div class="min-h-screen flex flex-col">
+    <header class="sticky top-0 z-40 bg-surface/80 backdrop-blur-md border-b border-border-subtle">
+      <div class="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between gap-4">
+        <router-link to="/" class="flex items-center gap-2 shrink-0">
+          <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl vaultly-gradient text-white">
+            <Vault class="w-5 h-5" />
+          </span>
+          <span class="text-lg font-bold font-display text-ink hidden sm:inline">Vault<span class="vaultly-gradtext">ly</span></span>
+        </router-link>
+
+        <nav class="hidden md:flex items-center gap-1">
+          <router-link
+            v-for="l in links" :key="l.to" :to="l.to"
+            class="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium text-ink-soft hover:bg-black/5 transition-colors"
+            active-class="!text-indigo bg-indigo/8"
+          >
+            <component :is="l.icon" class="w-4 h-4" />
+            {{ l.label }}
+          </router-link>
+        </nav>
+
+        <div class="flex items-center gap-3">
+          <PlanBadge class="hidden sm:inline-flex" />
+          <span class="text-sm text-ink-soft hidden lg:inline max-w-[12rem] truncate">{{ auth.user?.email }}</span>
+          <button class="hidden md:inline-flex text-ink-muted hover:text-rose transition-colors cursor-pointer" title="Log out" @click="logout">
+            <LogOut class="w-5 h-5" />
+          </button>
+          <button class="md:hidden text-ink cursor-pointer" @click="mobileOpen = !mobileOpen">
+            <component :is="mobileOpen ? X : Menu" class="w-6 h-6" />
+          </button>
+        </div>
+      </div>
+
+      <!-- Mobile nav -->
+      <nav v-if="mobileOpen" class="md:hidden border-t border-border-subtle px-4 py-3 flex flex-col gap-1">
+        <router-link
+          v-for="l in links" :key="l.to" :to="l.to" @click="mobileOpen = false"
+          class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-ink-soft hover:bg-black/5"
+          active-class="!text-indigo bg-indigo/8"
+        >
+          <component :is="l.icon" class="w-4 h-4" />
+          {{ l.label }}
+        </router-link>
+        <button class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-rose hover:bg-rose/5 cursor-pointer" @click="logout">
+          <LogOut class="w-4 h-4" /> Log out
+        </button>
+      </nav>
+    </header>
+
+    <main class="flex-1 w-full max-w-6xl mx-auto px-4 md:px-6 py-8">
+      <slot />
+    </main>
+  </div>
+</template>
