@@ -66,6 +66,10 @@ class Config:
     LLM_API_BASE: str = os.getenv('LLM_API_BASE', 'http://localhost:11434/v1')
     LLM_API_KEY: str = os.getenv('LLM_API_KEY', '')
     LLM_MODEL: str = os.getenv('LLM_MODEL', 'qwen2.5:1.5b-instruct')
+    # Vision model (on the same OpenAI-compatible server) used to OCR/describe
+    # uploaded images at ingestion time. Only needs to be a model that accepts
+    # image_url content — e.g. a VL or OCR model.
+    LLM_VISION_MODEL: str = os.getenv('LLM_VISION_MODEL', 'qwen3-vl-2b-instruct')
     # openai backend only: cap simultaneous in-flight generations from this
     # process to protect the inference server (0 = unlimited).
     LLM_MAX_CONCURRENCY: int = int(os.getenv('LLM_MAX_CONCURRENCY', 8))

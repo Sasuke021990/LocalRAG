@@ -64,7 +64,10 @@ function submit() {
   // array is exposed to the render as a *separate* reactive proxy, so mutating
   // the raw object never triggers a re-render and the answer bubble stays empty
   // while tokens stream in.
-  const m = reactive({ query: q, answer: '', reasoning: '', sources: [], refused: false, streaming: true, processingTime: undefined })
+  const m = reactive({
+    query: q, answer: '', reasoning: '', sources: [], refused: false, streaming: true,
+    processingTime: undefined, queryPool: selectedPool.value,
+  })
   history.value.push(m)
   const started = performance.now()
   scrollDown()

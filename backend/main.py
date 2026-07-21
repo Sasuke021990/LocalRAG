@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import secrets
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,6 +45,7 @@ from retrieval.hybrid_search import HybridSearchEngine
 from retrieval.reranker import CrossEncoderReranker
 from retrieval.semantic_cache import SemanticCache
 from utils import quota
+from utils import progress as upload_progress
 from utils.config import config
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -52,7 +54,11 @@ logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 DATA_DIR = Path(config.DATA_DIR)
-ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx", ".csv", ".md", ".html", ".htm", ".json", ".xml"}
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".txt", ".docx", ".csv", ".md", ".html", ".htm", ".json", ".xml",
+    # Images are OCR'd/described via the vision model at ingestion.
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif",
+}
 
 # ─── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -394,11 +400,21 @@ async def upload_document(
         with open(file_path, "wb") as fh:
             fh.write(content)
 
+        # Real progress for GET /progress/{task_id}: written at each pipeline
+        # phase (see ingestion.pipeline's progress_callback) so the UI can show
+        # "Parsing…" / "Reading image (OCR)…" / "Chunking…" / "Embedding…" /
+        # "Storing…" instead of a fixed spinner.
+        task_id = uuid.uuid4().hex
+        upload_progress.set_progress(auth_redis_client, task_id, user_id, 0, "Queued for processing…")
+
         # Queue background processing
         # NOTE: Plain `def` (not `async def`) so FastAPI routes this to a
         # threadpool executor — keeping the asyncio event loop free for other
         # requests while the heavy CPU work (parse → chunk → embed) runs.
         def _process():
+            def _on_progress(pct: int, message: str) -> None:
+                upload_progress.set_progress(auth_redis_client, task_id, user_id, pct, message)
+
             try:
                 result = ingestion_pipeline.process_document(
                     file_path,
@@ -407,6 +423,7 @@ async def upload_document(
                     chunk_overlap=chunk_overlap,
                     pool=safe_pool,
                     pool_assigned=pool_explicitly_selected,
+                    progress_callback=_on_progress,
                 )
                 logger.info(f"Processed: {file.filename} → {safe_pool} | {result['total_chunks']} chunks")
 
@@ -418,6 +435,10 @@ async def upload_document(
                     logger.warning(
                         f"Rolled back '{file.filename}' for user {user_id}: quota exceeded after ingestion"
                     )
+                    upload_progress.set_progress(
+                        auth_redis_client, task_id, user_id, 100,
+                        "Storage quota exceeded — upload removed", status="failed",
+                    )
                     webhooks.dispatch_event(
                         auth_redis_client, user_id, "document.ingest_failed",
                         {"file_name": file.filename, "pool": safe_pool, "reason": "quota_exceeded"},
@@ -425,6 +446,10 @@ async def upload_document(
                 else:
                     # New/changed document set for this user — drop the stale BM25 cache.
                     hybrid_search.invalidate_bm25(user_id)
+                    upload_progress.set_progress(
+                        auth_redis_client, task_id, user_id, 100,
+                        "Done — ready to search", status="complete",
+                    )
                     webhooks.dispatch_event(
                         auth_redis_client, user_id, "document.ingested",
                         {"file_name": file.filename, "pool": safe_pool,
@@ -432,6 +457,9 @@ async def upload_document(
                     )
             except Exception as exc:
                 logger.error(f"Background processing failed for '{file.filename}': {exc}")
+                upload_progress.set_progress(
+                    auth_redis_client, task_id, user_id, 100, str(exc) or "Processing failed", status="failed",
+                )
                 webhooks.dispatch_event(
                     auth_redis_client, user_id, "document.ingest_failed",
                     {"file_name": file.filename, "pool": safe_pool, "reason": "processing_error"},
@@ -441,6 +469,7 @@ async def upload_document(
 
         return {
             "status": "processing_started",
+            "task_id": task_id,
             "filename": file.filename,
             "pool": safe_pool,
             "pool_assigned": pool_explicitly_selected,
@@ -518,20 +547,39 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(require_cur
 
 # ─── SSE progress stream ──────────────────────────────────────────────────────
 
-@app.get("/progress/{task_id}", tags=["System"], summary="SSE progress stream for a background task")
+@app.get("/progress/{task_id}", tags=["System"], summary="SSE progress stream for a background ingestion task")
 async def stream_progress(task_id: str, user_id: str = Depends(require_current_user)):
     """
-    Server-Sent Events endpoint that streams progress updates (0–100 %)
-    for a background ingestion task.
+    Server-Sent Events endpoint that streams the real progress of a
+    background ingestion task started by ``POST /upload`` (whose response
+    includes this ``task_id``): parse → chunk → embed → store, plus an
+    OCR sub-step for images. Emits a ``progress`` event on every change and
+    a terminal ``complete`` event once (``status`` is ``"complete"`` or
+    ``"failed"``), then closes the stream.
     """
     async def _generator():
-        for i in range(10):
-            yield {
-                "event": "progress",
-                "data": json.dumps({"progress": (i + 1) * 10, "message": f"Step {i + 1} / 10"}),
-            }
-            await asyncio.sleep(0.5)
-        yield {"event": "complete", "data": json.dumps({"message": "Processing complete"})}
+        last = None
+        # ~2 minutes at the polling interval below — generous for even a slow
+        # image-OCR + embed pass; the client can just retry if it's cut short.
+        for _ in range(300):
+            entry = upload_progress.get_progress(auth_redis_client, task_id)
+            if entry is None:
+                await asyncio.sleep(0.4)
+                continue
+            if entry.get("user_id") != user_id:
+                # Don't leak another user's task existence/progress.
+                yield {"event": "error", "data": json.dumps({"detail": "Task not found"})}
+                return
+
+            fingerprint = (entry["percent"], entry["message"], entry["status"])
+            if fingerprint != last:
+                payload = {"progress": entry["percent"], "message": entry["message"], "status": entry["status"]}
+                terminal = entry["status"] in ("complete", "failed")
+                yield {"event": "complete" if terminal else "progress", "data": json.dumps(payload)}
+                last = fingerprint
+                if terminal:
+                    return
+            await asyncio.sleep(0.4)
 
     return EventSourceResponse(_generator())
 

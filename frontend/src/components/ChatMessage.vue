@@ -4,7 +4,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import Badge from './ui/Badge.vue'
 import IconChip from './ui/IconChip.vue'
-import { User, Sparkles, ChevronDown, Zap, Brain, SearchX, FolderOpen } from 'lucide-vue-next'
+import { User, Sparkles, ChevronDown, Zap, Brain, SearchX, FolderOpen, Loader2 } from 'lucide-vue-next'
 
 const props = defineProps({
   query: String,
@@ -14,6 +14,10 @@ const props = defineProps({
   refused: Boolean,
   streaming: Boolean,
   processingTime: Number,
+  // The pool this query was scoped to when sent (blank = all pools) — used
+  // only for the "Searching/Analysing …" status text below, before any
+  // passages have streamed back.
+  queryPool: { type: String, default: '' },
 })
 
 const showSources = ref(false)
@@ -34,6 +38,15 @@ const renderedAnswer = computed(() =>
 const sourcePools = computed(() => [
   ...new Set((props.sources || []).map((s) => s.pool).filter(Boolean)),
 ])
+
+// Transient status shown before the first answer token arrives: distinguishes
+// "still retrieving" from "found passages, generating a reply" so the wait
+// doesn't look frozen.
+const statusText = computed(() => {
+  if (!props.streaming || props.answer || props.refused) return ''
+  const scope = props.queryPool ? `the "${props.queryPool}" pool` : 'your documents'
+  return props.sources.length ? `Analysing ${scope}…` : `Searching ${scope}…`
+})
 </script>
 
 <template>
@@ -75,7 +88,13 @@ const sourcePools = computed(() => [
           :class="refused ? 'bg-amber/5 border border-amber/30' : 'bg-surface border border-border-subtle'"
         >
           <div class="text-sm leading-relaxed" :class="refused ? 'text-ink-soft' : 'text-ink'">
-            <div class="markdown" v-html="renderedAnswer" /><span v-if="streaming" class="inline-block w-1.5 h-4 bg-pink ml-0.5 align-middle animate-pulse" />
+            <div v-if="statusText" class="flex items-center gap-2 text-ink-soft italic">
+              <Loader2 class="w-3.5 h-3.5 animate-spin shrink-0" />
+              <span>{{ statusText }}</span>
+            </div>
+            <template v-else>
+              <div class="markdown" v-html="renderedAnswer" /><span v-if="streaming" class="inline-block w-1.5 h-4 bg-pink ml-0.5 align-middle animate-pulse" />
+            </template>
           </div>
 
           <div v-if="!refused && sources.length" class="mt-3 pt-3 border-t border-border-subtle">

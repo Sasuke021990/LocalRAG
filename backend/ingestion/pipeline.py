@@ -30,11 +30,14 @@ from retrieval import vector_index
 from utils.config import config
 from utils.device import get_best_device
 
+# Images are OCR'd/described at ingestion via the configured vision model.
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
+
 ALLOWED_EXTENSIONS = {
     ".pdf", ".txt", ".docx", ".csv",
     ".md", ".html", ".htm", ".json",
     ".xml", ".log",
-}
+} | IMAGE_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -330,7 +333,7 @@ class DocumentIngestionPipeline:
 
             # 1. Parse
             logger.info(f"Parsing: {file_path}")
-            text = self._parse_document(file_path)
+            text = self._parse_document(file_path, progress_callback)
             _cb(progress_callback, 30, "Document parsed ✓")
 
             # 2. Chunk
@@ -458,7 +461,7 @@ class DocumentIngestionPipeline:
     # Document parsers
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _parse_document(self, file_path: str) -> str:
+    def _parse_document(self, file_path: str, progress_callback: Optional[Callable[[int, str], None]] = None) -> str:
         ext = Path(file_path).suffix.lower()
         parsers = {
             ".pdf":  self._parse_pdf,
@@ -472,10 +475,63 @@ class DocumentIngestionPipeline:
             ".json": self._parse_json_file,
             ".xml":  self._parse_xml,
         }
+        if ext in IMAGE_EXTENSIONS:
+            return self._parse_image(file_path, progress_callback)
         parser = parsers.get(ext)
         if not parser:
             raise ValueError(f"Unsupported file type: {ext}")
         return parser(file_path)
+
+    def _parse_image(self, file_path: str, progress_callback: Optional[Callable[[int, str], None]] = None) -> str:
+        """
+        Extract text from an image by OCR/description via the configured vision
+        model on the OpenAI-compatible inference server (``LLM_VISION_MODEL``).
+        The resulting text is chunked/embedded like any other document, so
+        screenshots, scanned pages, photos of notes, etc. become searchable.
+
+        Raises ``ValueError`` (which marks the upload failed) if the vision
+        endpoint is unreachable or returns nothing usable.
+        """
+        import base64
+        import requests
+
+        _cb(progress_callback, 20, "Reading image (OCR) ✓")
+        ext = Path(file_path).suffix.lower().lstrip(".")
+        mime = "jpeg" if ext in ("jpg", "jpeg") else ext
+        with open(file_path, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode()
+
+        url = config.LLM_API_BASE.rstrip("/") + "/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if config.LLM_API_KEY:
+            headers["Authorization"] = f"Bearer {config.LLM_API_KEY}"
+        payload = {
+            "model": config.LLM_VISION_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": (
+                    "Extract ALL text from this image verbatim. Transcribe tables, "
+                    "diagrams, and handwriting as plain text. If the image contains "
+                    "no text, briefly describe what it shows."
+                )},
+                {"type": "image_url", "image_url": {"url": f"data:image/{mime};base64,{b64}"}},
+            ]}],
+            "temperature": 0.0,
+            "max_tokens": 2048,
+        }
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=120)
+            resp.raise_for_status()
+            resp.encoding = "utf-8"
+            text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read image via vision model '{config.LLM_VISION_MODEL}' "
+                f"at {config.LLM_API_BASE}: {exc}"
+            )
+        if not text:
+            raise ValueError("No text could be extracted from the image.")
+        logger.info(f"OCR'd image {Path(file_path).name}: {len(text)} chars via {config.LLM_VISION_MODEL}")
+        return text
 
     def _parse_pdf(self, file_path: str) -> str:
         text = ""
