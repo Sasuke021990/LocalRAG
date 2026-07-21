@@ -11,24 +11,26 @@ ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 ENV PYTHONPATH=/app:/app/backend
 
-# Install system dependencies
+# Install system dependencies (cmake is needed to build llama-cpp-python)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     build-essential \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for better caching)
-COPY backend/requirements.txt .
+COPY backend/requirements.txt backend/requirements-llm.txt ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (base + the optional local-LLM stack)
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r requirements-llm.txt
 
 # Copy the rest of the application
 COPY . .
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create data + model directories
+RUN mkdir -p /app/data /app/models
 
 # Expose port
 EXPOSE 8000

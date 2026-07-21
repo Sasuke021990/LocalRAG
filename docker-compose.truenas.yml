@@ -45,10 +45,23 @@ services:
       - SMTP_USE_TLS=${SMTP_USE_TLS:-True}
       - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
       - WEBHOOK_TIMEOUT_SECONDS=${WEBHOOK_TIMEOUT_SECONDS:-5}
+      # Local AI answers (grounded LLM) — off by default (see .env.example).
+      - LLM_ENABLED=${LLM_ENABLED:-False}
+      - LLM_MODEL_REPO=${LLM_MODEL_REPO:-Qwen/Qwen2.5-1.5B-Instruct-GGUF}
+      - LLM_MODEL_FILE=${LLM_MODEL_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}
+      - LLM_THINKING_ENABLED=${LLM_THINKING_ENABLED:-False}
+      - LLM_CONTEXT_SIZE=${LLM_CONTEXT_SIZE:-4096}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-512}
+      - LLM_THREADS=${LLM_THREADS:-0}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      - LLM_MIN_RELEVANCE_SCORE=${LLM_MIN_RELEVANCE_SCORE:-0.0}
     volumes:
       # Map this to your TrueNAS dataset for embedded files / JSON backups —
       # set KNOWLEDGE_DATA_PATH in .env (copy .env.example)
       - ${KNOWLEDGE_DATA_PATH:?Set KNOWLEDGE_DATA_PATH in .env}:/app/data
+      # Persist downloaded LLM weights (~1GB) — set MODELS_DATA_PATH in .env
+      # (only needed when LLM_ENABLED=true).
+      - ${MODELS_DATA_PATH:-./models}:/app/models
 
     # Optional NVIDIA GPU Support for TrueNAS
     # deploy:

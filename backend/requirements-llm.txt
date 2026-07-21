@@ -1,0 +1,6 @@
+# Optional dependency for local AI answer generation (LLM_ENABLED=true).
+# Kept out of requirements.txt / requirements-dev.txt on purpose so CI and
+# low-RAM installs don't build it — it's installed in the Docker image (which
+# adds `cmake`) and imported lazily by generation/llm.py. huggingface-hub
+# (already in requirements.txt) handles the model download.
+llama-cpp-python==0.3.2
