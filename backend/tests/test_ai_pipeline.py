@@ -86,6 +86,46 @@ class TestGate:
         assert any(e == "refusal" for e, _ in events)
         assert llm.called is False
 
+    async def test_no_results_uses_not_found_message(self):
+        kw = _base(hybrid_search=FakeSearch([]), llm=FakeLLM("x"))
+        events = await _drain(**kw)
+        refusal = next(data for ev, data in events if ev == "refusal")
+        assert refusal == grounding.NO_RESULTS_MESSAGE
+
+    async def test_irrelevant_results_use_out_of_scope_message(self, monkeypatch):
+        # Retrieved something, but below threshold → off-topic wording, not "not found".
+        monkeypatch.setattr(config, "LLM_MIN_RELEVANCE_SCORE", 0.5)
+        kw = _base(hybrid_search=FakeSearch([_Result("weak", 0.1)]), llm=FakeLLM("x"))
+        events = await _drain(**kw)
+        refusal = next(data for ev, data in events if ev == "refusal")
+        assert refusal == grounding.OUT_OF_SCOPE_MESSAGE
+
+
+@pytest.mark.anyio
+class TestGreeting:
+    async def test_greeting_answers_without_retrieval_or_llm(self):
+        llm = FakeLLM("should not run")
+        search = FakeSearch([_Result("X is a thing.", 0.9)])
+        events = await _drain(**_base(query="hi", hybrid_search=search, llm=llm))
+        kinds = [e for e, _ in events]
+        assert "token" in kinds
+        assert "refusal" not in kinds
+        assert llm.called is False
+        done = events[-1][1]
+        assert done["refused"] is False
+        assert done["sources"] == []
+        assert "vaultly" in done["answer"].lower()
+
+    async def test_thanks_is_treated_as_greeting(self):
+        events = await _drain(**_base(query="thank you", llm=FakeLLM("x")))
+        done = events[-1][1]
+        assert "welcome" in done["answer"].lower()
+
+    async def test_greeting_not_cached(self):
+        cache = FakeCache()
+        await _drain(**_base(query="hello", semantic_cache=cache, llm=FakeLLM("x")))
+        assert cache.saved == []
+
 
 @pytest.mark.anyio
 class TestGeneration:

@@ -1,6 +1,49 @@
 """Unit tests for generation.grounding — pure logic, no Redis or model."""
 
+import pytest
+
 from generation import grounding
+
+
+class TestGreetingDetection:
+    @pytest.mark.parametrize("msg", [
+        "hi", "Hi!", "hello", "hey", "heyy", "yo",
+        "good morning", "Good Evening.", "greetings",
+        "thanks", "thank you", "thx", "ty", "cheers",
+        "bye", "goodbye", "see you",
+        "how are you", "how's it going", "what's up", "sup",
+        "who are you?", "what can you do", "help",
+    ])
+    def test_greetings_detected(self, msg):
+        assert grounding.is_greeting(msg) is True
+
+    @pytest.mark.parametrize("msg", [
+        "hi, what does the report say?",
+        "what is the refund policy?",
+        "summarize document 2",
+        "hello world program in python",  # not a bare greeting
+        "",
+    ])
+    def test_non_greetings_not_detected(self, msg):
+        assert grounding.is_greeting(msg) is False
+
+    def test_thanks_response(self):
+        assert "welcome" in grounding.greeting_response("thanks").lower()
+
+    def test_capability_response_mentions_documents(self):
+        r = grounding.greeting_response("who are you?").lower()
+        assert "document" in r or "knowledge pool" in r
+
+    def test_default_greeting_is_friendly(self):
+        assert "vaultly" in grounding.greeting_response("hi").lower()
+
+
+class TestRefusalMessages:
+    def test_no_results_and_out_of_scope_are_distinct(self):
+        assert grounding.NO_RESULTS_MESSAGE != grounding.OUT_OF_SCOPE_MESSAGE
+
+    def test_refusal_message_is_out_of_scope_alias(self):
+        assert grounding.REFUSAL_MESSAGE == grounding.OUT_OF_SCOPE_MESSAGE
 
 
 class TestRelevanceGate:

@@ -83,17 +83,31 @@ async def stream_answer(
         })
         return
 
+    # 1b. Greeting / small-talk — answer conversationally, skip retrieval and the
+    # model entirely. Not cached (cheap to recompute; keeps the cache for real Qs).
+    if grounding.is_greeting(query):
+        reply = grounding.greeting_response(query)
+        yield ("sources", [])
+        yield ("token", reply)
+        yield ("done", {
+            "answer": reply, "reasoning": "", "sources": [],
+            "refused": False, "cached": False,
+        })
+        return
+
     # 2. Retrieve + rerank.
     results = hybrid_search.search(user_id, query=query, top_k=top_k)
     reranked = reranker.rerank(query=query, results=results, top_k=rerank_top_k) if rerank_top_k > 0 else results
     sources = _sources_from(reranked)
     yield ("sources", sources)
 
-    # 3. Refusal gate — the model is never invoked past here if it fails.
+    # 3. Refusal gate — the model is never invoked past here if it fails. Two
+    # distinct messages: nothing retrieved at all vs. retrieved-but-irrelevant.
     if not grounding.passes_relevance_gate(reranked, config.LLM_MIN_RELEVANCE_SCORE):
-        yield ("refusal", grounding.REFUSAL_MESSAGE)
+        message = grounding.NO_RESULTS_MESSAGE if not reranked else grounding.OUT_OF_SCOPE_MESSAGE
+        yield ("refusal", message)
         yield ("done", {
-            "answer": grounding.REFUSAL_MESSAGE, "reasoning": "",
+            "answer": message, "reasoning": "",
             "sources": sources, "refused": True, "cached": False,
         })
         return  # deliberately not cached — the user may add relevant docs later

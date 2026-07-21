@@ -353,13 +353,25 @@ user's own retrieved passages and to refuse otherwise. No LLM can be
 mathematically forced to ignore its training, so enforcement is layered and the
 intended failure mode is **refusal, not hallucination**:
 1. A **refusal gate runs before the model** — empty retrieval or a top score
-   below `LLM_MIN_RELEVANCE_SCORE` returns the fixed refusal and skips generation.
+   below `LLM_MIN_RELEVANCE_SCORE` returns a fixed message and skips generation.
 2. A **hard system prompt** constrains the model to the numbered passages, with
    deterministic decoding (temperature 0 by default).
 3. **Citations** (the exact passages given to the model) are always returned.
 
 Borderline-relevant context can still be paraphrased beyond the passages by a
 sub-2B model; the mitigation is the conservative, tunable gate — not a guarantee.
+
+**How the assistant responds by case** (so it feels like a chat assistant, not
+a search box that only ever says "no"):
+- **Greetings / small talk** ("hi", "thanks", "who are you?") — a short, friendly
+  reply that steers back to the documents. Handled *before* retrieval, so no
+  passages are searched and the model isn't called (works even with the LLM off).
+- **Nothing in the knowledge base matches** (empty retrieval) — *"I couldn't find
+  anything about that in your documents or knowledge pools…"*
+- **Off-topic question** (passages retrieved but they don't answer it) — *"I can
+  only answer using your documents and knowledge pools — I don't have knowledge
+  beyond them."*
+- **Answerable question** — a grounded answer with `[1] [2]` citations.
 
 **One model, all users.** The model is stateless and only ever sees the
 requesting user's own passages (retrieval is per-user), so a single shared
