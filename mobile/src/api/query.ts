@@ -6,6 +6,9 @@ export interface QueryResult { answer: string; sources: Source[]; processing_tim
 export const sendQuery = (query: string, topK = 10, rerankTopK = 5) =>
   request<QueryResult>('/query', jsonBody('POST', { query, top_k: topK, rerank_top_k: rerankTopK }))
 
+// Blank-line SSE frame separator, tolerant of \r\n / \r / \n line endings.
+const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/
+
 export interface StreamHandlers {
   onSources?: (s: Source[]) => void
   onThinking?: (t: string) => void
@@ -40,10 +43,12 @@ export async function streamQuery(query: string, topK = 10, rerankTopK = 5, h: S
       const { value, done } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
-      let sep
-      while ((sep = buffer.indexOf('\n\n')) !== -1) {
-        dispatch(buffer.slice(0, sep), h)
-        buffer = buffer.slice(sep + 2)
+      // SSE frames are separated by a blank line; sse_starlette uses \r\n
+      // endings (\r\n\r\n), so match any blank-line form rather than only \n\n.
+      let m
+      while ((m = FRAME_SEP.exec(buffer)) !== null) {
+        dispatch(buffer.slice(0, m.index), h)
+        buffer = buffer.slice(m.index + m[0].length)
       }
     }
   } catch (e: any) {
@@ -55,7 +60,7 @@ export async function streamQuery(query: string, topK = 10, rerankTopK = 5, h: S
 function dispatch(frame: string, h: StreamHandlers) {
   let event = 'message'
   const dataLines: string[] = []
-  for (const line of frame.split('\n')) {
+  for (const line of frame.split(/\r\n|\r|\n/)) {
     if (line.startsWith('event:')) event = line.slice(6).trim()
     else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
   }
