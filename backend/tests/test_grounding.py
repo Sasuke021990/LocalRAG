@@ -106,6 +106,72 @@ class TestPromptBuilder:
         assert sys_only in grounding.build_grounded_prompt("q", ["chunk"])
         assert grounding.build_grounded_messages("q", ["chunk"])[0]["content"] == sys_only
 
+    def test_prompt_includes_history_between_system_and_current_turn(self):
+        history = [{"role": "user", "content": "earlier question"}, {"role": "assistant", "content": "earlier answer"}]
+        p = grounding.build_grounded_prompt("follow-up", ["chunk"], history=history)
+        assert p.index("earlier question") < p.index("follow-up")
+        assert "earlier answer" in p
+
+    def test_messages_include_history_between_system_and_current_turn(self):
+        history = [{"role": "user", "content": "earlier question"}, {"role": "assistant", "content": "earlier answer"}]
+        msgs = grounding.build_grounded_messages("follow-up", ["chunk"], history=history)
+        assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
+        assert msgs[1]["content"] == "earlier question"
+        assert msgs[2]["content"] == "earlier answer"
+        assert msgs[3]["content"] == "follow-up"
+
+    def test_no_history_is_a_no_op(self):
+        assert grounding.build_grounded_prompt("q", ["c"]) == grounding.build_grounded_prompt("q", ["c"], history=None)
+        assert grounding.build_grounded_messages("q", ["c"], history=None) == grounding.build_grounded_messages("q", ["c"])
+
+
+class TestChatMessagesAndFormatting:
+    def test_chat_messages_no_history(self):
+        msgs = grounding.chat_messages("sys", "usr")
+        assert msgs == [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}]
+
+    def test_chat_messages_with_history(self):
+        history = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
+        msgs = grounding.chat_messages("sys", "usr", history)
+        assert msgs == [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+            {"role": "user", "content": "usr"},
+        ]
+
+    def test_format_chat_prompt_with_history_order(self):
+        history = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
+        p = grounding.format_chat_prompt("sys", "usr", history)
+        assert p.index("sys") < p.index("\na<") < p.index("\nb<") < p.index("\nusr<")
+        assert p.endswith("<|im_start|>assistant\n")
+
+
+class TestTrimHistory:
+    def test_empty_history(self):
+        assert grounding.trim_history([]) == []
+        assert grounding.trim_history(None) == []
+
+    def test_keeps_last_n_turns(self):
+        history = [{"role": "user" if i % 2 == 0 else "assistant", "content": str(i)} for i in range(10)]
+        trimmed = grounding.trim_history(history, max_turns=2)
+        assert len(trimmed) == 4
+        assert [m["content"] for m in trimmed] == ["6", "7", "8", "9"]
+
+    def test_truncates_long_messages(self):
+        history = [{"role": "user", "content": "x" * 1000}]
+        trimmed = grounding.trim_history(history, max_chars_per_message=100)
+        assert len(trimmed[0]["content"]) <= 102
+        assert trimmed[0]["content"].endswith("…")
+
+    def test_short_messages_untouched(self):
+        history = [{"role": "user", "content": "short"}]
+        assert grounding.trim_history(history) == [{"role": "user", "content": "short"}]
+
+    def test_missing_role_defaults_to_user(self):
+        trimmed = grounding.trim_history([{"content": "no role given"}])
+        assert trimmed[0]["role"] == "user"
+
 
 class TestSplitThinking:
     def test_no_think_block_returns_whole_answer(self):

@@ -188,13 +188,46 @@ def strip_trailing_refusal(answer: str) -> str:
     return answer
 
 
-def format_chat_prompt(system: str, user: str) -> str:
-    """Wrap a system + user message in the Qwen chat template (embedded backend)."""
-    return (
-        f"<|im_start|>system\n{system}<|im_end|>\n"
-        f"<|im_start|>user\n{user}<|im_end|>\n"
-        f"<|im_start|>assistant\n"
-    )
+def trim_history(
+    history: List[dict], max_turns: int = 3, max_chars_per_message: int = 500,
+) -> List[dict]:
+    """
+    Keep at most the last ``max_turns`` (user, assistant) exchanges — i.e. the
+    last ``2 * max_turns`` messages — each truncated to ``max_chars_per_message``
+    characters, so a long prior answer can't crowd out the current turn's
+    retrieved passages in the context budget. Expects/returns
+    ``{"role": "user"|"assistant", "content": str}`` dicts (extra keys, e.g.
+    stored ``sources``/``reasoning``, are dropped — only the text matters for
+    conversational continuity).
+    """
+    if not history:
+        return []
+    trimmed = history[-(max_turns * 2):]
+    out = []
+    for m in trimmed:
+        content = m.get("content") or ""
+        if len(content) > max_chars_per_message:
+            content = content[:max_chars_per_message].rstrip() + " …"
+        out.append({"role": m.get("role", "user"), "content": content})
+    return out
+
+
+def chat_messages(system: str, user: str, history: List[dict] = None) -> List[dict]:
+    """OpenAI-style messages: system, then prior turns (already trimmed), then
+    the current user message. Used by the openai-compatible backend."""
+    return [{"role": "system", "content": system}, *(history or []), {"role": "user", "content": user}]
+
+
+def format_chat_prompt(system: str, user: str, history: List[dict] = None) -> str:
+    """
+    Wrap system + prior turns (already trimmed) + the current user message in
+    the Qwen chat template (embedded backend).
+    """
+    parts = [f"<|im_start|>system\n{system}<|im_end|>\n"]
+    for m in (history or []):
+        parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n")
+    parts.append(f"<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n")
+    return "".join(parts)
 
 
 def build_grounded_prompt(
@@ -202,9 +235,10 @@ def build_grounded_prompt(
     chunks: List[str],
     thinking: bool = False,
     char_budget: int = 8000,
+    history: List[dict] = None,
 ) -> str:
     """Qwen-template raw prompt string for the embedded (completion) backend."""
-    return format_chat_prompt(build_system_prompt(chunks, thinking, char_budget), query)
+    return format_chat_prompt(build_system_prompt(chunks, thinking, char_budget), query, history)
 
 
 def build_grounded_messages(
@@ -212,12 +246,10 @@ def build_grounded_messages(
     chunks: List[str],
     thinking: bool = False,
     char_budget: int = 8000,
+    history: List[dict] = None,
 ) -> List[dict]:
     """OpenAI-style chat messages for the inference-server backend."""
-    return [
-        {"role": "system", "content": build_system_prompt(chunks, thinking, char_budget)},
-        {"role": "user", "content": query},
-    ]
+    return chat_messages(build_system_prompt(chunks, thinking, char_budget), query, history)
 
 
 def split_thinking(text: str) -> Tuple[str, str]:

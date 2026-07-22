@@ -1,7 +1,10 @@
 import { request, jsonBody } from './client.js'
 
-export const sendQuery = (query, topK = 10, rerankTopK = 5, pool = '') =>
-  request('/query', jsonBody('POST', { query, top_k: topK, rerank_top_k: rerankTopK, pool: pool || null }))
+export const sendQuery = (query, topK = 10, rerankTopK = 5, pool = '', conversationId = '') =>
+  request('/query', jsonBody('POST', {
+    query, top_k: topK, rerank_top_k: rerankTopK, pool: pool || null,
+    conversation_id: conversationId || null,
+  }))
 
 export const fetchHealth = () => request('/health')
 
@@ -11,9 +14,11 @@ const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/
 /**
  * Stream a grounded AI answer over SSE.
  * handlers: { onSources(list), onThinking(text), onToken(text), onRefusal(msg), onDone(data), onError(err) }
+ * `onDone`'s data includes `conversation_id` — new if `conversationId` was
+ * blank (a fresh conversation was created), otherwise the one passed in.
  * Returns a function that aborts the stream.
  */
-export function streamQuery(query, { topK = 10, rerankTopK = 5, pool = '' } = {}, handlers = {}) {
+export function streamQuery(query, { topK = 10, rerankTopK = 5, pool = '', conversationId = '' } = {}, handlers = {}) {
   const controller = new AbortController()
 
   ;(async () => {
@@ -22,7 +27,10 @@ export function streamQuery(query, { topK = 10, rerankTopK = 5, pool = '' } = {}
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, top_k: topK, rerank_top_k: rerankTopK, pool: pool || null }),
+        body: JSON.stringify({
+          query, top_k: topK, rerank_top_k: rerankTopK, pool: pool || null,
+          conversation_id: conversationId || null,
+        }),
         signal: controller.signal,
       })
       if (!res.ok || !res.body) {

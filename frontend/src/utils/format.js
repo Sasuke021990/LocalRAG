@@ -10,3 +10,16 @@ export function formatBytes(bytes) {
 export const GB = 1024 ** 3
 export const bytesToGb = (bytes) => +(bytes / GB).toFixed(2)
 export const gbToBytes = (gb) => Math.round(gb * GB)
+
+export function timeAgo(iso) {
+  if (!iso) return ''
+  const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (sec < 60) return 'just now'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.floor(hr / 24)
+  if (day < 7) return `${day}d ago`
+  return new Date(iso).toLocaleDateString()
+}

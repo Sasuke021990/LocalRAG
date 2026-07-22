@@ -64,8 +64,8 @@ possible.
 ## B. Chat experience — P1
 
 - [x] **Pool-selection popup** — opens automatically every time the Chat page is entered (Dashboard's "Open chat" / "Ask a question", nav link), listing pools + "All pools"; dismissing without a pick defaults to "All pools" rather than trapping the user. **Replaced** the inline dropdown with a small pill in the header that reopens the same popup to switch pools mid-conversation.
-- [ ] **Conversational memory** — every question is currently answered with zero memory of prior turns in the same chat; a follow-up like "what about the express option?" has no context. Needs prior turns threaded into the grounding prompt.
-- [ ] **Server-side chat history/persistence** — conversations currently live only in browser memory; a refresh loses everything. Need saved conversations, resume, rename, delete.
+- [x] **Conversational memory** — prior turns (last 3 exchanges, each truncated to 500 chars) are threaded into the prompt for both LLM backends (`grounding.trim_history`/`chat_messages`/`format_chat_prompt`), so follow-ups like "what about the express option?" resolve correctly from context. Verified end-to-end with a follow-up carrying zero topic words.
+- [x] **Server-side chat history/persistence** — new `backend/chat/` module: Redis-backed conversations (sorted-set index, not a `KEYS` scan — see the reliability item below this was written to avoid), `/chat/conversations` CRUD, auto-created on the first message of a new chat. Frontend gets a resumable sidebar (`ConversationSidebar.vue`): list, open, inline rename, delete-with-confirm, "New chat".
 - [ ] Citation click-to-preview — click `[1]` to see the exact source passage/doc
 - [ ] Answer feedback (👍/👎) — eval signal, surfaces bad answers to admins
 
@@ -75,6 +75,7 @@ possible.
 - [ ] Replace O(N) `KEYS` scans on hot paths (`list_documents`, cache stats, BM25 auto-load) with maintained index sets or `SCAN`
 - [ ] Rate limiting on auth and query endpoints (currently open to abuse)
 - [ ] Observability: structured logging, error tracking, metrics
+- [ ] **Vector index doesn't reliably survive a Redis restart** — discovered 2026-07-22 while testing conversational memory: `docker compose restart` (which also restarts Redis) silently dropped the `idx:chunks` RediSearch index while the underlying `chunk:*`/`document:*` data survived fine (plain Redis types round-trip through AOF correctly; the RediSearch index definition apparently doesn't, at least not reliably). Retrieval then returns **empty results with no error** — chat looks "broken" (refuses everything) with nothing in the logs pointing at the real cause unless you go looking for `KNN vector search failed: idx:chunks: no such index`. `ensure_index()` only runs at backend process startup, so it doesn't self-heal until the backend is *also* restarted after Redis. Fix ideas: have `/health` (or a startup check) verify the index exists and (re)call `ensure_index()` proactively; or have `vector_index.knn_search()` itself detect "no such index" and recreate + retry once rather than silently returning `[]`.
 
 ## D. Security hardening — P1
 

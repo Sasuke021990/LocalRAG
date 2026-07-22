@@ -2,12 +2,17 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { streamQuery } from '../api/query.js'
 import { fetchDocuments, fetchPools } from '../api/documents.js'
+import * as chatApi from '../api/chat.js'
+import { useToastStore } from '../stores/toast.js'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import IconChip from '../components/ui/IconChip.vue'
 import Modal from '../components/ui/Modal.vue'
 import ChatMessage from '../components/ChatMessage.vue'
+import ConversationSidebar from '../components/ConversationSidebar.vue'
 import { Sparkles, Send, Boxes, ChevronDown, Check } from 'lucide-vue-next'
+
+const toast = useToastStore()
 
 const query = ref('')
 const history = ref([])
@@ -19,12 +24,24 @@ const selectedPool = ref('')      // '' = search across all pools
 const poolChosen = ref(false)     // has the user made an explicit choice (incl. "All pools") yet
 const poolPopupOpen = ref(false)
 
+const conversations = ref([])
+const conversationsLoading = ref(true)
+const activeConversationId = ref('')   // '' = not-yet-saved new chat
+
 // Fixed retrieval depth: fetch 40 candidates, rerank, keep the top 20 passages.
 const RETRIEVE_K = 20
 
-// Load the user's documents (for tailored prompts) and pools (for the picker),
-// then gate entry behind the pool-selection popup — replaces the old always-
-// visible inline dropdown. Re-opens every time this page is entered.
+async function loadConversations() {
+  try {
+    conversations.value = (await chatApi.listConversations()).conversations || []
+  } catch (_) { /* sidebar just stays empty */ }
+  finally { conversationsLoading.value = false }
+}
+
+// Load the user's documents (for tailored prompts), pools (for the picker),
+// and the conversation list, then gate entry behind the pool-selection popup
+// — replaces the old always-visible inline dropdown. Re-opens every time a
+// brand-new chat is started (page entry, or "New chat").
 onMounted(async () => {
   try {
     documents.value = (await fetchDocuments()).documents || []
@@ -32,8 +49,78 @@ onMounted(async () => {
   try {
     pools.value = (await fetchPools()).pools || []
   } catch (_) { /* no pools yet — the popup still offers "All pools" */ }
+  loadConversations()
   poolPopupOpen.value = true
 })
+
+// Reconstruct display exchanges (one bubble-pair per turn) from the stored
+// flat user/assistant message list.
+function messagesToExchanges(messages) {
+  const out = []
+  let pendingUser = null
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      pendingUser = msg
+    } else if (msg.role === 'assistant') {
+      out.push({
+        query: pendingUser?.content || '',
+        answer: msg.content,
+        reasoning: msg.reasoning || '',
+        sources: msg.sources || [],
+        refused: !!msg.refused,
+        streaming: false,
+        processingTime: undefined,
+        queryPool: '',
+      })
+      pendingUser = null
+    }
+  }
+  return out
+}
+
+function newChat() {
+  if (loading.value) return
+  activeConversationId.value = ''
+  history.value = []
+  selectedPool.value = ''
+  poolChosen.value = false
+  poolPopupOpen.value = true
+}
+
+async function openConversation(conv) {
+  if (loading.value || conv.id === activeConversationId.value) return
+  try {
+    const detail = await chatApi.getConversation(conv.id)
+    activeConversationId.value = detail.id
+    history.value = messagesToExchanges(detail.messages)
+    selectedPool.value = detail.pool || ''
+    poolChosen.value = true
+    poolPopupOpen.value = false
+    scrollDown()
+  } catch (e) {
+    toast.push(e.message || 'Could not open conversation', 'error')
+  }
+}
+
+async function renameConv(conv, title) {
+  try {
+    await chatApi.renameConversation(conv.id, title)
+    const item = conversations.value.find((c) => c.id === conv.id)
+    if (item) item.title = title
+  } catch (e) {
+    toast.push(e.message || 'Could not rename conversation', 'error')
+  }
+}
+
+async function deleteConv(conv) {
+  try {
+    await chatApi.deleteConversation(conv.id)
+    conversations.value = conversations.value.filter((c) => c.id !== conv.id)
+    if (activeConversationId.value === conv.id) newChat()
+  } catch (e) {
+    toast.push(e.message || 'Could not delete conversation', 'error')
+  }
+}
 
 function choosePool(name) {
   selectedPool.value = name
@@ -90,7 +177,10 @@ function submit() {
   const started = performance.now()
   scrollDown()
 
-  streamQuery(q, { topK: RETRIEVE_K * 2, rerankTopK: RETRIEVE_K, pool: selectedPool.value }, {
+  streamQuery(q, {
+    topK: RETRIEVE_K * 2, rerankTopK: RETRIEVE_K, pool: selectedPool.value,
+    conversationId: activeConversationId.value,
+  }, {
     onSources: (list) => { m.sources = list },
     onThinking: (t) => { m.reasoning += t; scrollDown() },
     onToken: (t) => { m.answer += t; scrollDown() },
@@ -102,6 +192,8 @@ function submit() {
       m.streaming = false
       m.processingTime = data.cached ? 0 : (performance.now() - started) / 1000
       loading.value = false
+      if (data.conversation_id) activeConversationId.value = data.conversation_id
+      loadConversations()
       scrollDown()
     },
     onError: (err) => {
@@ -114,7 +206,14 @@ function submit() {
 </script>
 
 <template>
-  <div class="flex flex-col gap-6 h-[calc(100vh-9rem)]">
+  <div class="flex gap-4 h-[calc(100vh-9rem)]">
+    <ConversationSidebar
+      class="hidden md:flex"
+      :conversations="conversations" :active-id="activeConversationId" :loading="conversationsLoading"
+      @select="openConversation" @new-chat="newChat" @rename="renameConv" @delete="deleteConv"
+    />
+
+    <div class="flex-1 min-w-0 flex flex-col gap-6">
     <div class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-bold font-display text-ink">Chat</h1>
@@ -167,6 +266,7 @@ function submit() {
         </Button>
       </form>
     </Card>
+    </div>
 
     <!-- Pool-selection popup: shown on entry, and again via the pill above to
          switch pools mid-conversation. Dismissing without a pick keeps/defaults

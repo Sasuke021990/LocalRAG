@@ -25,7 +25,7 @@ ranked passages) — generation never crashes a request.
 import asyncio
 import json
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, List, Optional
 
 import requests
 
@@ -45,7 +45,7 @@ class BaseLLM:
     def ready(self) -> bool:
         return False
 
-    async def generate_stream(self, system: str, user: str) -> AsyncIterator[str]:
+    async def generate_stream(self, system: str, user: str, history: Optional[List[dict]] = None) -> AsyncIterator[str]:
         return
         yield  # pragma: no cover — makes this an async generator
 
@@ -91,10 +91,10 @@ class EmbeddedLLM(BaseLLM):
     def ready(self) -> bool:
         return self.enabled and self._loaded and self._llama is not None
 
-    async def generate_stream(self, system: str, user: str) -> AsyncIterator[str]:
+    async def generate_stream(self, system: str, user: str, history: Optional[List[dict]] = None) -> AsyncIterator[str]:
         if not self.ready:
             return
-        prompt = grounding.format_chat_prompt(system, user)
+        prompt = grounding.format_chat_prompt(system, user, history)
         async with self._lock:
             loop = asyncio.get_event_loop()
             queue: asyncio.Queue = asyncio.Queue()
@@ -155,13 +155,13 @@ class OpenAICompatibleLLM(BaseLLM):
         if self._sem is not None:
             self._sem.release()
 
-    async def generate_stream(self, system: str, user: str) -> AsyncIterator[str]:
+    async def generate_stream(self, system: str, user: str, history: Optional[List[dict]] = None) -> AsyncIterator[str]:
         if not self.ready:
             return
 
         payload = {
             "model": config.LLM_MODEL,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "messages": grounding.chat_messages(system, user, history),
             "temperature": config.LLM_TEMPERATURE,
             "max_tokens": config.LLM_MAX_TOKENS,
             "stream": True,
