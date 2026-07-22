@@ -33,7 +33,9 @@ from sse_starlette.sse import EventSourceResponse
 from admin import routes as admin_routes
 from auth import routes as auth_routes
 from auth import store as auth_store
+from billing import plans as billing_plans
 from billing import routes as billing_routes
+from billing import store as billing_store
 from auth.dependencies import require_current_user
 from auth.redis_client import redis_client as auth_redis_client
 from chat import routes as chat_routes
@@ -499,12 +501,22 @@ def _resolve_conversation(user_id: str, request: QueryRequest) -> Dict[str, Any]
     Fetch the conversation named by ``request.conversation_id``, or create a
     new one (titled from the query text) when it's blank. Raises 404 if an
     explicit id doesn't exist / isn't this user's.
+
+    Creating a new conversation first enforces the plan's saved-conversation
+    cap (Free/Pro/Max — see billing.plans): if the user is already at the
+    limit, the least-recently-touched conversation is auto-deleted to make
+    room. Admin/operator accounts are exempt, same as the AI-question quota.
     """
     if request.conversation_id:
         conv = chat_store.get_conversation(auth_redis_client, user_id, request.conversation_id)
         if conv is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return conv
+    if not auth_store.is_effective_admin_by_id(auth_redis_client, user_id):
+        plan = billing_store.get_plan(auth_redis_client, user_id)
+        chat_store.enforce_conversation_limit(
+            auth_redis_client, user_id, billing_plans.conversation_limit_for(plan),
+        )
     return chat_store.create_conversation(
         auth_redis_client, user_id, pool=request.pool or "", title=request.query[:60],
     )
@@ -517,11 +529,25 @@ def _history_from(conv: Dict[str, Any]) -> List[Dict[str, str]]:
     return [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
 
 
+def _slim_sources(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Drop each source's full passage text before persisting — empirically
+    ~70% of a stored message's size. The live response (SSE ``sources``
+    event / QueryResponse.sources) keeps the full text unchanged; only the
+    saved copy is trimmed. Re-attached on read from the still-durable chunk
+    data (see chat.routes._hydrate_sources) when a conversation is reopened.
+    """
+    return [
+        {k: s[k] for k in ("file_name", "pool", "chunk_index", "score") if k in s}
+        for s in sources
+    ]
+
+
 def _persist_turn(user_id: str, conversation_id: str, query: str, result: Dict[str, Any], pool: Optional[str]) -> None:
     chat_store.append_message(auth_redis_client, user_id, conversation_id, "user", query)
     chat_store.append_message(
         auth_redis_client, user_id, conversation_id, "assistant", result.get("answer", ""),
-        reasoning=result.get("reasoning", ""), sources=result.get("sources", []),
+        reasoning=result.get("reasoning", ""), sources=_slim_sources(result.get("sources", [])),
         refused=result.get("refused", False), pool=pool or "",
     )
 

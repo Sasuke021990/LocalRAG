@@ -17,24 +17,8 @@ from fastapi import HTTPException
 from auth import store
 from billing import plans as billing_plans
 from billing import store as billing_store
-from utils.config import config
 
 logger = logging.getLogger(__name__)
-
-
-def _is_admin(redis_client, user_id: str) -> bool:
-    """
-    True if the user operates the platform — either their stored ``is_admin``
-    flag is set, or their email matches ``ADMIN_EMAIL``. Mirrors
-    ``auth.routes._is_effective_admin`` so admin status is judged the same way
-    everywhere.
-    """
-    user = store.get_user_by_id(redis_client, user_id)
-    if not user:
-        return False
-    if user.get("is_admin"):
-        return True
-    return bool(config.ADMIN_EMAIL) and user.get("email", "").lower() == config.ADMIN_EMAIL.lower()
 
 # AI-question quota keys expire 2 days out — comfortably past the daily
 # rollover, so old days clean themselves up without a cron.
@@ -63,7 +47,7 @@ def check_ai_question_allowed(redis_client, user_id: str) -> None:
     Admin/operator accounts are exempt — they run the platform and must not be
     throttled by a consumer plan quota.
     """
-    if _is_admin(redis_client, user_id):
+    if store.is_effective_admin_by_id(redis_client, user_id):
         return
     limit = ai_questions_limit(redis_client, user_id)
     used = get_ai_questions_used_today(redis_client, user_id)

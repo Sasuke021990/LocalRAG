@@ -95,3 +95,28 @@ class TestStorageQuotaFields:
 
     def test_get_storage_used_missing_user_returns_zero(self, redis_client):
         assert store.get_storage_used(redis_client, "does-not-exist") == 0
+
+
+class TestIsEffectiveAdmin:
+    def test_none_user_not_admin(self):
+        assert store.is_effective_admin(None) is False
+
+    def test_stored_flag_makes_admin(self):
+        assert store.is_effective_admin({"email": "x@example.com", "is_admin": True}) is True
+
+    def test_no_flag_no_env_match_not_admin(self):
+        assert store.is_effective_admin({"email": "x@example.com", "is_admin": False}) is False
+
+    def test_env_email_match_makes_admin(self, monkeypatch):
+        from utils.config import config
+        monkeypatch.setattr(config, "ADMIN_EMAIL", "boss@example.com")
+        assert store.is_effective_admin({"email": "Boss@Example.com", "is_admin": False}) is True
+
+    def test_by_id_delegates_to_stored_row(self, redis_client):
+        user_id = store.create_user(redis_client, "judy@example.com", password_hash="hashed")
+        assert store.is_effective_admin_by_id(redis_client, user_id) is False
+        store.set_admin(redis_client, user_id, True)
+        assert store.is_effective_admin_by_id(redis_client, user_id) is True
+
+    def test_by_id_missing_user_not_admin(self, redis_client):
+        assert store.is_effective_admin_by_id(redis_client, "no-such-user") is False
