@@ -4,7 +4,10 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import Badge from './ui/Badge.vue'
 import IconChip from './ui/IconChip.vue'
-import { User, Sparkles, ChevronDown, Zap, Brain, SearchX, FolderOpen, Loader2 } from 'lucide-vue-next'
+import { useAuthStore } from '../stores/auth.js'
+import { User, Sparkles, ChevronDown, Zap, Brain, SearchX, FolderOpen, Loader2, FileText } from 'lucide-vue-next'
+
+const auth = useAuthStore()
 
 const props = defineProps({
   query: String,
@@ -20,7 +23,6 @@ const props = defineProps({
   queryPool: { type: String, default: '' },
 })
 
-const showSources = ref(false)
 const showThinking = ref(false)
 
 // GitHub-flavoured markdown; single newlines become <br> (chat-friendly).
@@ -37,6 +39,14 @@ const renderedAnswer = computed(() =>
 // so it's clear at a glance which knowledge pool a reply is grounded in.
 const sourcePools = computed(() => [
   ...new Set((props.sources || []).map((s) => s.pool).filter(Boolean)),
+])
+
+// Unique source document names — shown as a compact row instead of the old
+// "N sources" expandable panel (which listed every chunk's score + content
+// preview, often 10-20 deep). Just the file names, deduplicated, since
+// multiple chunks commonly come from the same document.
+const sourceDocuments = computed(() => [
+  ...new Set((props.sources || []).map((s) => s.file_name).filter(Boolean)),
 ])
 
 // Transient status shown before the first answer token arrives: distinguishes
@@ -97,25 +107,14 @@ const statusText = computed(() => {
             </template>
           </div>
 
-          <div v-if="!refused && sources.length" class="mt-3 pt-3 border-t border-border-subtle">
-            <button class="flex items-center gap-1.5 text-xs font-semibold text-ink-soft hover:text-indigo cursor-pointer" @click="showSources = !showSources">
-              <ChevronDown class="w-3.5 h-3.5 transition-transform" :class="showSources ? 'rotate-180' : ''" />
-              {{ sources.length }} source{{ sources.length > 1 ? 's' : '' }}
-            </button>
-            <ul v-if="showSources" class="flex flex-col gap-2 mt-3">
-              <li v-for="(s, i) in sources" :key="i" class="bg-surface-alt rounded-xl p-3 border border-border-subtle">
-                <div class="flex items-center gap-2 flex-wrap mb-1">
-                  <span class="text-xs font-semibold text-ink truncate">{{ s.file_name }}</span>
-                  <Badge color="pink">pool: {{ s.pool }}</Badge>
-                  <span class="text-xs font-mono text-ink-muted">{{ (s.score * 100).toFixed(0) }}%</span>
-                </div>
-                <p class="text-xs text-ink-soft line-clamp-3">{{ s.content }}</p>
-              </li>
-            </ul>
+          <div v-if="!refused && sourceDocuments.length" class="mt-3 pt-3 border-t border-border-subtle flex flex-wrap items-center gap-1.5">
+            <FileText class="w-3.5 h-3.5 text-ink-muted shrink-0" />
+            <Badge v-for="doc in sourceDocuments" :key="doc" color="slate">{{ doc }}</Badge>
           </div>
         </div>
 
-        <p v-if="processingTime !== undefined" class="text-xs mt-1.5 flex items-center gap-1"
+        <!-- Timing/cache indicator: admin-only diagnostic, not user-facing -->
+        <p v-if="processingTime !== undefined && auth.user?.is_admin" class="text-xs mt-1.5 flex items-center gap-1"
            :class="processingTime === 0 ? 'text-emerald' : 'text-ink-muted'">
           <Zap v-if="processingTime === 0" class="w-3 h-3" />
           {{ processingTime === 0 ? 'Instant (cached)' : `${(processingTime * 1000).toFixed(0)}ms` }}

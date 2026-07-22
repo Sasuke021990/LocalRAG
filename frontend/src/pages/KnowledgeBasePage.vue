@@ -8,11 +8,12 @@ import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Badge from '../components/ui/Badge.vue'
 import Modal from '../components/ui/Modal.vue'
+import Input from '../components/ui/Input.vue'
 import IconChip from '../components/ui/IconChip.vue'
 import PoolPicker from '../components/PoolPicker.vue'
 import UploadDropzone from '../components/UploadDropzone.vue'
 import DocumentCard from '../components/DocumentCard.vue'
-import { Boxes, AlertCircle, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { Boxes, AlertCircle, RefreshCw, Trash2, Plus } from 'lucide-vue-next'
 
 const toast = useToastStore()
 const auth = useAuthStore()
@@ -102,6 +103,34 @@ async function removePool(name) {
     toast.error(e.message || 'Could not delete pool')
   }
 }
+
+// ─── Dedicated "create pool" flow — previously only possible as a side
+// effect of uploading or moving a document (buried inside PoolPicker's
+// inline "+ New" toggle). This gives it a clear, direct entry point. ───
+const newPoolOpen = ref(false)
+const newPoolName = ref('')
+const creatingPool = ref(false)
+
+function openNewPool() {
+  newPoolName.value = ''
+  newPoolOpen.value = true
+}
+
+async function createPool() {
+  const name = newPoolName.value.trim()
+  if (!name) return
+  creatingPool.value = true
+  try {
+    await documentsApi.createPool(name)
+    toast.success(`Pool "${name}" created`)
+    newPoolOpen.value = false
+    await load()
+  } catch (e) {
+    toast.error(e.message || 'Could not create pool')
+  } finally {
+    creatingPool.value = false
+  }
+}
 </script>
 
 <template>
@@ -111,7 +140,10 @@ async function removePool(name) {
         <h1 class="text-2xl font-bold font-display text-ink">Knowledge Base</h1>
         <p class="text-ink-soft text-sm">Organize documents into pools.</p>
       </div>
-      <Button variant="ghost" @click="load"><RefreshCw class="w-4 h-4" /> Refresh</Button>
+      <div class="flex items-center gap-2">
+        <Button variant="secondary" @click="openNewPool"><Plus class="w-4 h-4" /> New pool</Button>
+        <Button variant="ghost" @click="load"><RefreshCw class="w-4 h-4" /> Refresh</Button>
+      </div>
     </div>
 
     <div class="grid gap-8 lg:grid-cols-[22rem_1fr]">
@@ -177,6 +209,20 @@ async function removePool(name) {
       <div class="flex gap-2 mt-6">
         <Button variant="secondary" block @click="moveOpen = false">Cancel</Button>
         <Button block @click="confirmMove">Save</Button>
+      </div>
+    </Modal>
+
+    <!-- Dedicated pool-creation flow -->
+    <Modal :open="newPoolOpen" title="Create a knowledge pool" @close="newPoolOpen = false">
+      <p class="text-sm text-ink-soft mb-4">
+        Pools let you organize documents by topic, project, or team — chat and search can be scoped to just one.
+      </p>
+      <Input v-model="newPoolName" label="Pool name" placeholder="e.g. Finance, Legal, Product Docs" @keydown.enter.prevent="createPool" />
+      <div class="flex gap-2 mt-6">
+        <Button variant="secondary" block @click="newPoolOpen = false">Cancel</Button>
+        <Button block :disabled="creatingPool || !newPoolName.trim()" @click="createPool">
+          {{ creatingPool ? 'Creating…' : 'Create pool' }}
+        </Button>
       </div>
     </Modal>
   </div>

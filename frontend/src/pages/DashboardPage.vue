@@ -9,7 +9,7 @@ import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import IconChip from '../components/ui/IconChip.vue'
 import UsageRing from '../components/UsageRing.vue'
-import { FileText, Boxes, Upload, MessageSquare, Sparkles, Loader2 } from 'lucide-vue-next'
+import { FileText, Boxes, Upload, MessageSquare, Sparkles, Loader2, Plug } from 'lucide-vue-next'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -164,6 +164,19 @@ const firstName = computed(() => auth.user?.username || (auth.user?.email || '')
           <span v-if="d.pool_assigned === false" class="text-xs text-amber font-semibold">needs a pool</span>
         </li>
       </ul>
+    </Card>
+
+    <!-- MCP awareness — surfaces the integration without requiring users to
+         already know to look in Settings for it. -->
+    <Card interactive class="cursor-pointer" @click="router.push('/settings')">
+      <div class="flex items-center gap-4">
+        <IconChip color="indigo"><Plug class="w-5 h-5" /></IconChip>
+        <div class="flex-1">
+          <p class="font-semibold text-ink">Connect your AI tools via MCP</p>
+          <p class="text-sm text-ink-soft">Let Claude Desktop, Cursor, and other AI agents search your Vaultly knowledge base directly — create an API token in Settings to get started.</p>
+        </div>
+        <Button variant="secondary" @click.stop="router.push('/settings')">Set up</Button>
+      </div>
     </Card>
   </div>
 </template>

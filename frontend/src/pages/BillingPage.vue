@@ -175,8 +175,9 @@ async function submitContact() {
 
     <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
       <Card v-for="p in cards" :key="p.id" interactive
+        class="flex flex-col h-full"
         :class="p.highlight ? 'ring-2 ring-indigo/40' : ''">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-2 min-h-[1.75rem]">
           <h3 class="text-lg font-semibold font-display text-ink">{{ p.name }}</h3>
           <Badge v-if="p.highlight" color="pink">Popular</Badge>
           <Badge v-else-if="p.contactOnly" color="indigo">Enterprise</Badge>
@@ -185,15 +186,15 @@ async function submitContact() {
           <span class="text-3xl font-bold font-display vaultly-gradtext">{{ p.price }}</span>
           <span class="text-sm text-ink-soft"> / {{ p.period }}</span>
         </p>
-        <ul class="flex flex-col gap-2 mt-5 mb-6">
+        <ul class="flex flex-col gap-2 mt-5 mb-6 flex-1">
           <li v-for="f in p.features" :key="f" class="flex items-center gap-2 text-sm text-ink-soft">
             <Check class="w-4 h-4 text-emerald shrink-0" /> {{ f }}
           </li>
         </ul>
 
-        <Button v-if="p.contactOnly" variant="secondary" block @click="openContact">Contact us</Button>
-        <Button v-else-if="p.id === usage.plan" variant="secondary" block disabled>Current plan</Button>
-        <Button v-else :variant="p.highlight ? 'primary' : 'secondary'" block
+        <Button v-if="p.contactOnly" variant="secondary" block class="mt-auto" @click="openContact">Contact us</Button>
+        <Button v-else-if="p.id === usage.plan" variant="secondary" block disabled class="mt-auto">Current plan</Button>
+        <Button v-else :variant="p.highlight ? 'primary' : 'secondary'" block class="mt-auto"
           :disabled="!!busy" @click="selectPlan(p.id)">
           <span v-if="busy === p.id">Switching…</span>
           <span v-else>{{ p.id === 'free' ? 'Downgrade to Free' : `Upgrade to ${p.name}` }}</span>

@@ -49,6 +49,31 @@ async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast.success('Copied to clipboard') }
   catch (_) { toast.error('Copy failed — select and copy manually') }
 }
+
+// Ready-to-use examples for the just-created token, so it's immediately
+// usable instead of just a bare string. Uses the app's own origin as the API
+// base — correct for both a local dev stack and a hosted deployment.
+const curlExample = (token) =>
+  `curl -X POST ${window.location.origin}/api/query \\\n` +
+  `  -H "Authorization: Bearer ${token}" \\\n` +
+  `  -H "Content-Type: application/json" \\\n` +
+  `  -d '{"query": "What does my policy document say about refunds?"}'`
+
+const mcpConfigExample = (token) => JSON.stringify({
+  mcpServers: {
+    vaultly: {
+      command: 'node',
+      args: ['/absolute/path/to/mcp/index.js'],
+      env: {
+        // mcp/index.js calls `${VAULTLY_API_URL}/query` directly (no proxy
+        // of its own), and the app's own /api/* Express route strips the
+        // /api prefix before forwarding — so the base must include /api.
+        VAULTLY_API_URL: `${window.location.origin}/api`,
+        VAULTLY_MCP_TOKEN: token,
+      },
+    },
+  },
+}, null, 2)
 </script>
 
 <template>
@@ -86,6 +111,25 @@ async function copy(text) {
           <Copy class="w-4 h-4" />
         </button>
       </div>
+
+      <!-- Ready-to-use examples, so the token is immediately usable -->
+      <div v-if="revealed" class="flex flex-col gap-3 mt-4">
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <p class="text-xs font-medium text-ink-soft">Try it with curl</p>
+            <button class="text-indigo hover:opacity-80 cursor-pointer" @click="copy(curlExample(revealed.token))"><Copy class="w-3.5 h-3.5" /></button>
+          </div>
+          <pre class="text-xs font-mono bg-surface-alt border border-border-subtle rounded-xl p-3 overflow-x-auto whitespace-pre-wrap">{{ curlExample(revealed.token) }}</pre>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <p class="text-xs font-medium text-ink-soft">Claude Desktop MCP config</p>
+            <button class="text-indigo hover:opacity-80 cursor-pointer" @click="copy(mcpConfigExample(revealed.token))"><Copy class="w-3.5 h-3.5" /></button>
+          </div>
+          <pre class="text-xs font-mono bg-surface-alt border border-border-subtle rounded-xl p-3 overflow-x-auto">{{ mcpConfigExample(revealed.token) }}</pre>
+        </div>
+      </div>
+
       <Button class="mt-5" block @click="revealed = null">Done</Button>
     </Modal>
   </div>

@@ -48,6 +48,10 @@ async def subscription(user_id: str = Depends(require_current_user)):
         "ai_questions_used_today": quota.get_ai_questions_used_today(redis_client, user_id),
         "ai_questions_per_day": plans.ai_questions_per_day_for(plan),
         "ai_unlimited_plan_wide": plans.PLANS.get(plan, {}).get("ai_unlimited_plan_wide", False),
+        # Lets the frontend gate plan-restricted UI (e.g. webhooks) against the
+        # same feature flags billing/plans.py already defines as the source
+        # of truth, instead of hardcoding "webhooks require Pro+" client-side.
+        "features": plans.features_for(plan),
     }
 
 

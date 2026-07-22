@@ -114,6 +114,14 @@ class TestBillingRoutes:
         assert body["plan"] == "free"
         assert body["quota_bytes"] == plans.quota_for("free")
 
+    def test_subscription_exposes_feature_flags_for_frontend_gating(self, billing_client):
+        _signup(billing_client)
+        body = billing_client.get("/billing/subscription").json()
+        assert body["features"]["webhooks"] is False  # free plan
+        billing_client.post("/billing/checkout", json={"plan": "pro"})
+        body = billing_client.get("/billing/subscription").json()
+        assert body["features"]["webhooks"] is True  # pro plan
+
     def test_checkout_activates_immediately_as_stub(self, billing_client):
         _signup(billing_client)
         resp = billing_client.post("/billing/checkout", json={"plan": "pro"})
