@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, EmailStr, field_validator
 
+from utils.config import config
+
 
 def _validate_password_length(v: str) -> str:
     if len(v) < 8:
@@ -63,3 +65,7 @@ class UserOut(BaseModel):
     storage_quota_bytes: int
     plan: str = "free"
     is_admin: bool = False
+    # Not passed explicitly by any route — Pydantic fills it from this
+    # class-level default, sourced from Config (env), on every response that
+    # doesn't set it. Read by the frontend's idle-session timer.
+    idle_timeout_seconds: int = config.SESSION_IDLE_TIMEOUT_SECONDS

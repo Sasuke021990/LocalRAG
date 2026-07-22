@@ -103,6 +103,12 @@ class Config:
     # not a runtime surprise. Generate with e.g. `openssl rand -hex 32`.
     JWT_SECRET: str = os.getenv('JWT_SECRET', '')
     SESSION_COOKIE_MAX_AGE_SECONDS: int = int(os.getenv('SESSION_COOKIE_MAX_AGE_SECONDS', 7 * 24 * 3600))
+    # Client-side inactivity timeout: after this many seconds with no user
+    # interaction (mouse/keyboard/touch/scroll), the frontend shows a "still
+    # there?" popup and force-logs-out if it goes unanswered for another
+    # window of the same length. Does not change the session cookie's actual
+    # lifetime above — this is a UX/security layer on top of it.
+    SESSION_IDLE_TIMEOUT_SECONDS: int = int(os.getenv('SESSION_IDLE_TIMEOUT_SECONDS', 60))
     DEFAULT_STORAGE_QUOTA_BYTES: int = int(os.getenv('DEFAULT_STORAGE_QUOTA_BYTES', 1024 ** 3))
     FRONTEND_BASE_URL: str = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000')
 

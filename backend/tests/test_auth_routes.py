@@ -44,6 +44,15 @@ class TestSignupLoginMe:
         assert resp.status_code == 200
         assert resp.json()["username"] == "nouser"
 
+    def test_signup_and_me_expose_idle_timeout(self, auth_client):
+        from utils.config import config
+        resp = auth_client.post(
+            "/auth/signup", json={"email": "idletest@example.com", "password": "longenough123"},
+        )
+        assert resp.json()["idle_timeout_seconds"] == config.SESSION_IDLE_TIMEOUT_SECONDS
+        me = auth_client.get("/auth/me")
+        assert me.json()["idle_timeout_seconds"] == config.SESSION_IDLE_TIMEOUT_SECONDS
+
     def test_login_wrong_password_401(self, auth_client):
         auth_client.post("/auth/signup", json={"email": "dave@example.com", "password": "longenough123"})
         resp = auth_client.post("/auth/login", json={"email": "dave@example.com", "password": "wrongpassword"})

@@ -106,7 +106,7 @@ Mobile is missing everything web just got:
 
 ## H. Account & Session — P1
 
-- [ ] **Idle session timeout with renewal popup** — after 1 minute of no activity in the app/web (configurable via env, e.g. `SESSION_IDLE_TIMEOUT_SECONDS`, default 60), show a "still there? continue session" popup. Confirm → refresh/extend the session. No response / decline → log out. Confirmed 2026-07-22: 1 minute is the real intended default, must be configurable.
+- [x] **Idle session timeout with renewal popup** — `SESSION_IDLE_TIMEOUT_SECONDS` (default 60, env-configurable), exposed via `/auth/me`. Frontend tracks activity app-wide (`AppShell.vue`); idle past the timeout shows "Still there?"; unanswered for another full window → auto logout; "Continue session" resets the timer. Resolves only via its own buttons/backdrop, not incidental page activity, so it can't flicker open and vanish.
 - [x] **Signup captures Username** — form requires it; API accepts it optionally (falls back to the email's local part server-side, so other API callers stay compatible); Google OAuth signup uses Google's profile name. Surfaced in the header, Dashboard greeting, and admin user list (still shows email alongside).
 
 ## I. UI Polish & Micro-interactions — P2

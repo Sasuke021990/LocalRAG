@@ -1,8 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
 import PlanBadge from './PlanBadge.vue'
+import Modal from './ui/Modal.vue'
+import Button from './ui/Button.vue'
 import { Vault, LayoutDashboard, MessageSquare, Database, CreditCard, Settings, ShieldCheck, LogOut, Menu, X } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -22,6 +24,59 @@ async function logout() {
   await auth.logout()
   router.push('/login')
 }
+
+// ─── Idle-session timeout ───────────────────────────────────────────────────
+// After `idle_timeout_seconds` (server-configured via SESSION_IDLE_TIMEOUT_
+// SECONDS, from /auth/me) of no mouse/keyboard/touch/scroll activity, show a
+// "still there?" popup. It resolves only via its own buttons (or the modal
+// backdrop) — not by incidental page activity, so it can't flicker open and
+// silently vanish. Left unanswered for another full timeout window, the user
+// is force-logged-out.
+const idlePopupOpen = ref(false)
+let lastActivity = Date.now()
+let popupOpenedAt = 0
+let checkTimer = null
+
+const idleTimeoutMs = computed(() => (auth.user?.idle_timeout_seconds ?? 60) * 1000)
+const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll']
+
+function markActivity() {
+  if (idlePopupOpen.value) return  // once prompted, only the popup's own actions resolve it
+  lastActivity = Date.now()
+}
+
+function checkIdle() {
+  if (!auth.isAuthenticated) return
+  const now = Date.now()
+  if (!idlePopupOpen.value) {
+    if (now - lastActivity >= idleTimeoutMs.value) {
+      idlePopupOpen.value = true
+      popupOpenedAt = now
+    }
+  } else if (now - popupOpenedAt >= idleTimeoutMs.value) {
+    forceLogout()
+  }
+}
+
+function continueSession() {
+  idlePopupOpen.value = false
+  lastActivity = Date.now()
+}
+
+async function forceLogout() {
+  idlePopupOpen.value = false
+  await auth.logout()
+  router.push('/login')
+}
+
+onMounted(() => {
+  ACTIVITY_EVENTS.forEach((evt) => window.addEventListener(evt, markActivity, { passive: true }))
+  checkTimer = setInterval(checkIdle, 1000)
+})
+onUnmounted(() => {
+  ACTIVITY_EVENTS.forEach((evt) => window.removeEventListener(evt, markActivity))
+  clearInterval(checkTimer)
+})
 </script>
 
 <template>
@@ -79,5 +134,15 @@ async function logout() {
     <main class="flex-1 w-full max-w-6xl mx-auto px-4 md:px-6 py-8">
       <slot />
     </main>
+
+    <Modal :open="idlePopupOpen" title="Still there?" @close="continueSession">
+      <p class="text-sm text-ink-soft mb-6">
+        You've been inactive for a while. For your security, we'll sign you out soon unless you confirm you're still here.
+      </p>
+      <div class="flex gap-2">
+        <Button variant="secondary" block @click="forceLogout">Log out</Button>
+        <Button block @click="continueSession">Continue session</Button>
+      </div>
+    </Modal>
   </div>
 </template>
