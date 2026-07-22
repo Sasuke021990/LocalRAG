@@ -87,7 +87,7 @@ function submit() {
       scrollDown()
     },
     onError: (err) => {
-      m.answer = m.answer || `Something went wrong: ${err.message}`
+      m.answer = m.answer || err.message || 'Something went wrong.'
       m.streaming = false
       loading.value = false
     },
