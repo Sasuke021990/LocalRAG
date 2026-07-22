@@ -28,10 +28,10 @@ async function logout() {
 // ─── Idle-session timeout ───────────────────────────────────────────────────
 // After `idle_timeout_seconds` (server-configured via SESSION_IDLE_TIMEOUT_
 // SECONDS, from /auth/me) of no mouse/keyboard/touch/scroll activity, show a
-// "still there?" popup. It resolves only via its own buttons (or the modal
-// backdrop) — not by incidental page activity, so it can't flicker open and
-// silently vanish. Left unanswered for another full timeout window, the user
-// is force-logged-out.
+// "still there?" popup. It resolves ONLY via its own two buttons — the modal
+// is non-dismissible (no backdrop click, no X), so an incidental click on the
+// page can never silently make it vanish. Left unanswered for another full
+// timeout window, the user is force-logged-out.
 const idlePopupOpen = ref(false)
 let lastActivity = Date.now()
 let popupOpenedAt = 0
@@ -135,7 +135,7 @@ onUnmounted(() => {
       <slot />
     </main>
 
-    <Modal :open="idlePopupOpen" title="Still there?" @close="continueSession">
+    <Modal :open="idlePopupOpen" title="Still there?" :dismissible="false" @close="continueSession">
       <p class="text-sm text-ink-soft mb-6">
         You've been inactive for a while. For your security, we'll sign you out soon unless you confirm you're still here.
       </p>

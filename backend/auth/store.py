@@ -8,6 +8,7 @@ user:<user_id>                    HASH   email, password_hash, google_sub,
                                           storage_quota_bytes, storage_used_bytes,
                                           is_admin, is_active
 user_email_index:<email lower>    STRING -> user_id
+user_username_index:<username lower> STRING -> user_id
 user_google_index:<google sub>    STRING -> user_id
 password_reset:<token>            STRING -> user_id  (TTL 1 hour)
 """
@@ -33,6 +34,10 @@ def _email_index_key(email: str) -> str:
     return f"user_email_index:{email.lower()}"
 
 
+def _username_index_key(username: str) -> str:
+    return f"user_username_index:{username.lower()}"
+
+
 def _google_index_key(sub: str) -> str:
     return f"user_google_index:{sub}"
 
@@ -45,19 +50,28 @@ def create_user(
     redis_client, email: str, password_hash: str = "", google_sub: str = "", username: str = ""
 ) -> str:
     """
-    Create a new user. Raises ValueError if the email is already registered.
+    Create a new user. Raises ValueError("email already registered") or
+    ValueError("username already taken") — callers distinguish on the message
+    to return the right error to the client.
+
     ``username`` falls back to the email's local part (before ``@``) when not
     given — e.g. for the Google OAuth path when Google didn't return a name,
-    and for the default-admin seed.
+    and for the default-admin seed. The fallback is also subject to the
+    uniqueness check, so a colliding auto-derived username still raises
+    rather than silently attaching to someone else's index entry.
     """
     if redis_client.exists(_email_index_key(email)):
         raise ValueError("email already registered")
+
+    resolved_username = (username or "").strip() or email.split("@")[0]
+    if redis_client.exists(_username_index_key(resolved_username)):
+        raise ValueError("username already taken")
 
     user_id = uuid.uuid4().hex
     redis_client.hset(
         _user_key(user_id),
         mapping={
-            "username": (username or "").strip() or email.split("@")[0],
+            "username": resolved_username,
             "email": email,
             "password_hash": password_hash,
             "google_sub": google_sub,
@@ -71,6 +85,7 @@ def create_user(
         },
     )
     redis_client.set(_email_index_key(email), user_id)
+    redis_client.set(_username_index_key(resolved_username), user_id)
     if google_sub:
         redis_client.set(_google_index_key(google_sub), user_id)
 
@@ -121,6 +136,23 @@ def get_user_by_email(redis_client, email: str) -> Optional[Dict[str, Any]]:
     if not user_id:
         return None
     return get_user_by_id(redis_client, user_id)
+
+
+def get_user_by_username(redis_client, username: str) -> Optional[Dict[str, Any]]:
+    user_id = redis_client.get(_username_index_key(username))
+    if not user_id:
+        return None
+    return get_user_by_id(redis_client, user_id)
+
+
+def get_user_by_identifier(redis_client, identifier: str) -> Optional[Dict[str, Any]]:
+    """
+    Look up a user by email OR username, whichever matches — lets login
+    accept either without the caller having to guess the format. Tries email
+    first (the common case); a non-email identifier simply misses that
+    lookup and falls through, no format-sniffing needed.
+    """
+    return get_user_by_email(redis_client, identifier) or get_user_by_username(redis_client, identifier)
 
 
 def get_user_by_google_sub(redis_client, sub: str) -> Optional[Dict[str, Any]]:

@@ -48,6 +48,8 @@ solo/homelab RAG tool toward a **real multi-tenant SaaS product**.
 - [x] **Customize plan card**: no price shown, "Contact us" button instead of "Subscribe" — different flow (no checkout)
 - [x] **Contact-us lead capture**: form (name, email, company, message) → `POST /billing/contact`; emails `ADMIN_EMAIL` (reusing SMTP) + persists the lead in Redis. _Admin-panel view of leads still pending._
 - [ ] Real Stripe (or Razorpay, given INR) integration replacing the billing stub — for Free/Pro/Max only; Customize is handled manually/off-platform after contact
+- [ ] **Bug**: Billing page plan cards (Free/Pro/Max/Customize) aren't uniformly aligned/sized in the grid — fix so all cards share the same height/format regardless of content length (e.g. Customize's shorter feature list). Reported 2026-07-22.
+- [ ] Enforce the Free-plan "no webhooks" gate in the frontend, not just the plans table — verify `WebhookManager.vue` actually hides/disables for Free (feature flag already exists in `billing/plans.py`, needs a frontend check against it). See also epic K for a webhook setup template.
 - [x] Enforce AI-question daily quota per plan (`utils/quota.py`: daily counter, resets daily, 429 when exceeded; `/billing/subscription` exposes usage; Billing page shows "AI answers today")
 - [ ] Team workspaces: invite up to 5 people (Max plan only), shared knowledge base, roles (owner/admin/member)
 - [ ] Audit log: who uploaded/deleted/moved what, admin actions
@@ -69,6 +71,8 @@ possible.
 - [x] **Saved-conversation caps per plan** — Free 5 / Pro 15 / Max 20 (env-configurable: `FREE_CONVERSATION_LIMIT`/`PRO_CONVERSATION_LIMIT`/`MAX_CONVERSATION_LIMIT`). Starting a new chat past the cap auto-deletes the least-recently-touched conversation (confirmed 2026-07-22 — no blocking/upgrade nag). Admin/operator accounts exempt (same pattern as the AI-question quota). Alongside this, stored messages no longer duplicate full retrieved-passage text (`sources`) — trimmed to file_name/pool/chunk_index/score (~70% smaller, measured), re-hydrated from the still-durable `chunk:*` data on read when a conversation is reopened.
 - [ ] Citation click-to-preview — click `[1]` to see the exact source passage/doc
 - [ ] Answer feedback (👍/👎) — eval signal, surfaces bad answers to admins
+- [ ] Hide the per-message timing/cache indicator ("Instant (cached)" / e.g. "6820ms") from regular users — admin-only. Currently shown to everyone (`ChatMessage.vue`). Reported 2026-07-22.
+- [ ] Replace the expandable "N sources" panel (full passage content) with just the source **document names** — less clutter per answer, still traceable back to the file. Reported 2026-07-22.
 
 ## C. Reliability & scaling — P1
 
@@ -95,6 +99,7 @@ possible.
 - [ ] Search/filter documents by name, pool, type, date
 - [ ] Nested pools or tags (currently flat pools only)
 - [ ] Re-process a document (e.g. after an embedding-model change)
+- [ ] Enhance the pool-creation UI flow — currently a bare inline create field in `PoolPicker.vue`; wants a more guided/polished flow (exact design TBD). Reported 2026-07-22.
 
 ## F. Mobile parity — P2
 
@@ -114,6 +119,8 @@ Mobile is missing everything web just got:
 
 - [x] **Idle session timeout with renewal popup** — `SESSION_IDLE_TIMEOUT_SECONDS` (default 60, env-configurable), exposed via `/auth/me`. Frontend tracks activity app-wide (`AppShell.vue`); idle past the timeout shows "Still there?"; unanswered for another full window → auto logout; "Continue session" resets the timer. Resolves only via its own buttons/backdrop, not incidental page activity, so it can't flicker open and vanish.
 - [x] **Signup captures Username** — form requires it; API accepts it optionally (falls back to the email's local part server-side, so other API callers stay compatible); Google OAuth signup uses Google's profile name. Surfaced in the header, Dashboard greeting, and admin user list (still shows email alongside).
+- [ ] Support login via **username OR email** (currently email+password only) and **enforce username uniqueness at signup** — currently only email is checked for uniqueness; two accounts can share the same username. Reported 2026-07-22.
+- [ ] **Bug**: the idle-timeout "Still there?" popup currently dismisses on *any* click, including clicking the backdrop (deliberately mapped to "continue" when built) — reported as unacceptable: it must only be dismissible via its two explicit buttons ("Continue session" / "Log out"), never by clicking elsewhere on the page. Needs the `Modal`'s backdrop-click-to-close wired to a no-op for this specific popup (or a `Modal` prop to disable backdrop-dismiss). Reported 2026-07-22.
 
 ## I. UI Polish & Micro-interactions — P2
 
@@ -126,8 +133,23 @@ motion. Candidate ideas (refine once we're ready to scope this properly):
 - [ ] Toast entrance/exit animation polish
 - [ ] Extend the existing upload-milestone confetti (already in Knowledge Base) to more success moments
 - [ ] Empty-state illustrations with subtle motion
+- [ ] Settings page: the Change Password section should be **collapsed by default** (currently always expanded). Reported 2026-07-22.
 
-## J. New ideas (open — to be filled in as we discuss)
+## J. Integrations & Onboarding UX — P2
+
+Reported 2026-07-22 — making the API token / webhook / MCP integrations
+actually discoverable and easy to start using, not just present in the UI:
+- [ ] Settings → API/MCP tokens: show a **copy-paste-ready example** (e.g. a
+  curl command or MCP client config snippet using the token) so a new token
+  is immediately usable, not just a bare string.
+- [ ] Settings → Webhooks: same idea — a copy-paste **webhook setup
+  template** (endpoint config + a sample payload for each event type).
+  Pairs with the Free-plan webhook gate in epic A.
+- [ ] **Dashboard: add an "MCP" section** so users discover that Vaultly can
+  be connected to their AI tools/agents via MCP, without having to already
+  know to look in Settings.
+
+## K. New ideas (open — to be filled in as we discuss)
 
 - [ ] _(placeholder — add items here as they come up)_
 
@@ -139,4 +161,4 @@ motion. Candidate ideas (refine once we're ready to scope this properly):
 2. Confirm/adjust the Phase tags above — do B/C/D/H really come first, or should something else jump the queue?
 3. Team workspaces (A) is a structural change (multi-user per tenant) — worth scoping as its own dedicated planning pass before starting.
 4. Payment processor: Stripe doesn't natively settle in INR as smoothly as Razorpay/PayU — worth deciding before the Stripe-stub-replacement work starts.
-5. Anything to add to section J from further discussion?
+5. Anything to add to section K from further discussion?

@@ -31,7 +31,7 @@ async function submit() {
 <template>
   <AuthShell title="Welcome back" subtitle="Sign in to your knowledge base.">
     <form class="flex flex-col gap-4" @submit.prevent="submit">
-      <Input v-model="email" type="email" label="Email" placeholder="you@example.com" autocomplete="email" required />
+      <Input v-model="email" type="text" label="Email or username" placeholder="you@example.com" autocomplete="username" required />
       <Input v-model="password" type="password" label="Password" placeholder="••••••••" autocomplete="current-password" required />
       <p v-if="error" class="text-sm text-rose">{{ error }}</p>
       <Button type="submit" :disabled="loading" block>{{ loading ? 'Signing in…' : 'Sign in' }}</Button>

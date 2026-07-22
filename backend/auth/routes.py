@@ -65,8 +65,9 @@ async def signup(body: SignupRequest, response: Response):
             redis_client, body.email, password_hash=passwords.hash_password(body.password),
             username=body.username,
         )
-    except ValueError:
-        raise HTTPException(status_code=409, detail="Email already registered")
+    except ValueError as exc:
+        detail = "Username already taken" if "username" in str(exc) else "Email already registered"
+        raise HTTPException(status_code=409, detail=detail)
 
     token = _set_session_cookie(response, user_id, token_version=0)
     user = store.get_user_by_id(redis_client, user_id)
@@ -76,9 +77,10 @@ async def signup(body: SignupRequest, response: Response):
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: LoginRequest, response: Response):
-    user = store.get_user_by_email(redis_client, body.email)
+    """``body.email`` accepts either an email address or a username."""
+    user = store.get_user_by_identifier(redis_client, body.email)
     if not user or not user["password_hash"] or not passwords.verify_password(body.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid email/username or password")
 
     token = _set_session_cookie(response, user["user_id"], user["token_version"])
     return _user_out(user, token)

@@ -35,6 +35,53 @@ class TestCreateAndLookup:
         assert store.get_user_by_email(redis_client, "nobody@example.com") is None
 
 
+class TestUsernameUniqueness:
+    def test_username_stored_and_looked_up(self, redis_client):
+        user_id = store.create_user(redis_client, "carol@example.com", password_hash="h", username="carolyn")
+        assert store.get_user_by_username(redis_client, "carolyn")["user_id"] == user_id
+
+    def test_username_lookup_case_insensitive(self, redis_client):
+        user_id = store.create_user(redis_client, "dave@example.com", password_hash="h", username="DaveD")
+        assert store.get_user_by_username(redis_client, "daved")["user_id"] == user_id
+
+    def test_duplicate_username_raises(self, redis_client):
+        store.create_user(redis_client, "erin1@example.com", password_hash="h", username="erin")
+        with pytest.raises(ValueError, match="username"):
+            store.create_user(redis_client, "erin2@example.com", password_hash="h", username="erin")
+
+    def test_duplicate_username_different_case_raises(self, redis_client):
+        store.create_user(redis_client, "frank1@example.com", password_hash="h", username="frank")
+        with pytest.raises(ValueError, match="username"):
+            store.create_user(redis_client, "frank2@example.com", password_hash="h", username="FRANK")
+
+    def test_auto_derived_username_also_checked_for_collision(self, redis_client):
+        # No explicit username on the second signup -> falls back to the
+        # email's local part ("grace") -> must still collide correctly.
+        store.create_user(redis_client, "grace@example.com", password_hash="h", username="grace")
+        with pytest.raises(ValueError, match="username"):
+            store.create_user(redis_client, "grace@other.com", password_hash="h")
+
+    def test_missing_username_returns_none(self, redis_client):
+        assert store.get_user_by_username(redis_client, "no-such-user") is None
+
+
+class TestGetUserByIdentifier:
+    def test_finds_by_email(self, redis_client):
+        user_id = store.create_user(redis_client, "henry@example.com", password_hash="h", username="henry_h")
+        assert store.get_user_by_identifier(redis_client, "henry@example.com")["user_id"] == user_id
+
+    def test_finds_by_username(self, redis_client):
+        user_id = store.create_user(redis_client, "ivy@example.com", password_hash="h", username="ivy_i")
+        assert store.get_user_by_identifier(redis_client, "ivy_i")["user_id"] == user_id
+
+    def test_finds_by_username_case_insensitive(self, redis_client):
+        user_id = store.create_user(redis_client, "jack@example.com", password_hash="h", username="JackJ")
+        assert store.get_user_by_identifier(redis_client, "jackj")["user_id"] == user_id
+
+    def test_missing_identifier_returns_none(self, redis_client):
+        assert store.get_user_by_identifier(redis_client, "nobody-at-all") is None
+
+
 class TestGoogleLinking:
     def test_create_user_with_google_sub(self, redis_client):
         user_id = store.create_user(redis_client, "bob@example.com", google_sub="g-123")

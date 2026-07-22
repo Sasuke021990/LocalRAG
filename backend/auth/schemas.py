@@ -31,7 +31,11 @@ class SignupRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    # Accepts either an email address or a username — kept the field name
+    # `email` (rather than `identifier`) so existing clients (web, mobile)
+    # sending {"email": ..., "password": ...} keep working unchanged; it's
+    # just no longer required to be email-shaped.
+    email: str
     password: str
 
 

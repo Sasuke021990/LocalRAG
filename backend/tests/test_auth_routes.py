@@ -79,6 +79,45 @@ class TestSignupLoginMe:
         resp = auth_client.post("/auth/login", json={"email": "frank@example.com", "password": "longenough123"})
         assert resp.json()["session_token"]
 
+    def test_login_by_username(self, auth_client):
+        auth_client.post(
+            "/auth/signup",
+            json={"username": "kelly_k", "email": "kelly@example.com", "password": "longenough123"},
+        )
+        auth_client.cookies.clear()
+        resp = auth_client.post("/auth/login", json={"email": "kelly_k", "password": "longenough123"})
+        assert resp.status_code == 200
+        assert resp.json()["email"] == "kelly@example.com"
+
+    def test_login_by_username_case_insensitive(self, auth_client):
+        auth_client.post(
+            "/auth/signup",
+            json={"username": "LeoLion", "email": "leo@example.com", "password": "longenough123"},
+        )
+        auth_client.cookies.clear()
+        resp = auth_client.post("/auth/login", json={"email": "leolion", "password": "longenough123"})
+        assert resp.status_code == 200
+
+    def test_login_unknown_username_401(self, auth_client):
+        resp = auth_client.post("/auth/login", json={"email": "no-such-username", "password": "longenough123"})
+        assert resp.status_code == 401
+
+    def test_signup_duplicate_username_409(self, auth_client):
+        auth_client.post(
+            "/auth/signup", json={"username": "mona", "email": "mona1@example.com", "password": "longenough123"},
+        )
+        resp = auth_client.post(
+            "/auth/signup", json={"username": "mona", "email": "mona2@example.com", "password": "longenough123"},
+        )
+        assert resp.status_code == 409
+        assert "username" in resp.json()["detail"].lower()
+
+    def test_signup_duplicate_email_error_mentions_email_not_username(self, auth_client):
+        auth_client.post("/auth/signup", json={"email": "nolan@example.com", "password": "longenough123"})
+        resp = auth_client.post("/auth/signup", json={"email": "nolan@example.com", "password": "otherpassword"})
+        assert resp.status_code == 409
+        assert "email" in resp.json()["detail"].lower()
+
 
 class TestChangePassword:
     def test_change_password_success_keeps_session(self, auth_client):
