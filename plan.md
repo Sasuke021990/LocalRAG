@@ -36,19 +36,19 @@ solo/homelab RAG tool toward a **real multi-tenant SaaS product**.
 | Price (monthly) | ₹0 | ₹59 | ₹79 | **Contact us** |
 | Price (annual) | ₹0 | ₹600 | ₹800 | **Contact us** |
 
-- [ ] Define these tiers in `backend/billing/plans.py`, replacing the current stub
-- [ ] Make all quota numbers configurable via env (not hardcoded), e.g.:
+- [x] Define these tiers in `backend/billing/plans.py`, replacing the current stub
+- [x] Make all quota numbers configurable via env (not hardcoded):
   - `FREE_AI_QUESTIONS_PER_DAY` (default 10)
   - `PRO_AI_QUESTIONS_PER_DAY` (default 25)
   - `MAX_AI_QUESTIONS_PER_DAY_PER_USER` (default 30)
   - `FREE_STORAGE_GB` / `PRO_STORAGE_GB` / `MAX_STORAGE_GB` (1 / 5 / 15)
   - `PRO_PRICE_MONTHLY_INR` / `PRO_PRICE_ANNUAL_INR` (59 / 600)
   - `MAX_PRICE_MONTHLY_INR` / `MAX_PRICE_ANNUAL_INR` (79 / 800)
-- [ ] Update `BillingPage.vue` / `PlanBadge.vue` / mobile `BillingScreen.tsx` to show these tiers, in ₹ not $
-- [ ] **Customize plan card**: no price shown, "Contact us" button instead of "Subscribe" — different flow from the other three (no checkout)
-- [ ] **Contact-us lead capture**: a form (name, email, company, message/needs) submitted to the backend; on submit, **email the admin** (reuse the existing SMTP setup in `auth/email_service.py`; send to `ADMIN_EMAIL`) with the lead details; leads also stored and visible in the admin panel for follow-up. Confirmed 2026-07-22: email is the required notification channel.
+- [x] Update `BillingPage.vue` to show these tiers, in ₹ not $ (backend-driven, monthly/annual toggle) — _mobile `BillingScreen.tsx` still pending (Epic F)_
+- [x] **Customize plan card**: no price shown, "Contact us" button instead of "Subscribe" — different flow (no checkout)
+- [x] **Contact-us lead capture**: form (name, email, company, message) → `POST /billing/contact`; emails `ADMIN_EMAIL` (reusing SMTP) + persists the lead in Redis. _Admin-panel view of leads still pending._
 - [ ] Real Stripe (or Razorpay, given INR) integration replacing the billing stub — for Free/Pro/Max only; Customize is handled manually/off-platform after contact
-- [ ] Enforce AI-question daily quota per plan (new counter, resets daily — separate from the existing storage quota in `utils/quota.py`)
+- [x] Enforce AI-question daily quota per plan (`utils/quota.py`: daily counter, resets daily, 429 when exceeded; `/billing/subscription` exposes usage; Billing page shows "AI answers today")
 - [ ] Team workspaces: invite up to 5 people (Max plan only), shared knowledge base, roles (owner/admin/member)
 - [ ] Audit log: who uploaded/deleted/moved what, admin actions
 - [ ] Data export & account deletion (GDPR-style portability / right-to-be-forgotten)

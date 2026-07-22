@@ -18,8 +18,15 @@ const usage = useUsageStore()
 const toast = useToastStore()
 
 const rawPlans = ref([])
+const sub = ref(null)           // current subscription incl. AI usage
 const billed = ref('monthly')   // 'monthly' | 'annual'
 const busy = ref('')            // id of the plan currently being switched to
+
+async function loadSubscription() {
+  try {
+    sub.value = await billingApi.fetchSubscription()
+  } catch (_) { /* non-fatal — the usage line just won't render */ }
+}
 
 onMounted(async () => {
   try {
@@ -27,6 +34,7 @@ onMounted(async () => {
   } catch (e) {
     toast.push(e.message || 'Could not load plans', 'error')
   }
+  loadSubscription()
 })
 
 const rupee = (n) => `₹${Number(n).toLocaleString('en-IN')}`
@@ -81,6 +89,7 @@ async function selectPlan(planId) {
     if (planId === 'free') await billingApi.cancelSubscription()
     else await billingApi.checkout(planId)
     await auth.fetchCurrentUser()
+    await loadSubscription()
     const name = cards.value.find((p) => p.id === planId)?.name ?? planId
     toast.push(planId === 'free' ? 'Switched to the Free plan.' : `You're now on ${name}!`)
   } catch (err) {
@@ -140,6 +149,12 @@ async function submitContact() {
           </div>
           <p class="text-ink-soft text-sm max-w-md">
             Upgrade any time for more storage, higher AI limits, and team features.
+          </p>
+          <p v-if="sub" class="text-sm text-ink mt-3">
+            <span class="font-semibold">AI answers today:</span>
+            {{ sub.ai_questions_used_today }} / {{ sub.ai_questions_per_day }}
+            <span v-if="sub.ai_unlimited_plan_wide" class="text-ink-soft">per user (plan unlimited)</span>
+            <span class="text-ink-soft"> · resets daily</span>
           </p>
         </div>
       </div>

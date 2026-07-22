@@ -59,3 +59,34 @@ class TestIsOverQuota:
         redis_client.hset(f"user:{user}", "storage_quota_bytes", 1000)
         quota.record_ingested_document(redis_client, user, 1500)
         assert quota.is_over_quota(redis_client, user) is True
+
+
+class TestAiQuestionQuota:
+    def test_new_user_on_free_has_ten_per_day(self, redis_client, user):
+        # A new user defaults to the free plan (10 AI questions/day).
+        assert quota.ai_questions_limit(redis_client, user) == 10
+        assert quota.get_ai_questions_used_today(redis_client, user) == 0
+
+    def test_record_increments_daily_count(self, redis_client, user):
+        assert quota.record_ai_question(redis_client, user) == 1
+        assert quota.record_ai_question(redis_client, user) == 2
+        assert quota.get_ai_questions_used_today(redis_client, user) == 2
+
+    def test_check_passes_under_limit(self, redis_client, user):
+        for _ in range(9):
+            quota.record_ai_question(redis_client, user)
+        quota.check_ai_question_allowed(redis_client, user)  # 9 < 10, no raise
+
+    def test_check_raises_429_at_limit(self, redis_client, user):
+        for _ in range(10):
+            quota.record_ai_question(redis_client, user)
+        with pytest.raises(HTTPException) as exc_info:
+            quota.check_ai_question_allowed(redis_client, user)
+        assert exc_info.value.status_code == 429
+
+    def test_limit_follows_plan(self, redis_client, user):
+        from billing import store as billing_store
+        billing_store.set_plan(redis_client, user, "pro")
+        assert quota.ai_questions_limit(redis_client, user) == 25
+        billing_store.set_plan(redis_client, user, "max")
+        assert quota.ai_questions_limit(redis_client, user) == 30

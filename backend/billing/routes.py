@@ -39,8 +39,16 @@ async def list_plans(_user_id: str = Depends(require_current_user)):
 
 @router.get("/subscription", tags=["Billing"], summary="Current plan")
 async def subscription(user_id: str = Depends(require_current_user)):
+    from utils import quota  # local import avoids a utils.quota → billing cycle at module load
+
     plan = billing_store.get_plan(redis_client, user_id)
-    return {"plan": plan, "quota_bytes": plans.quota_for(plan)}
+    return {
+        "plan": plan,
+        "quota_bytes": plans.quota_for(plan),
+        "ai_questions_used_today": quota.get_ai_questions_used_today(redis_client, user_id),
+        "ai_questions_per_day": plans.ai_questions_per_day_for(plan),
+        "ai_unlimited_plan_wide": plans.PLANS.get(plan, {}).get("ai_unlimited_plan_wide", False),
+    }
 
 
 @router.post("/checkout", tags=["Billing"], summary="Upgrade/switch plan (stub — no payment)")
