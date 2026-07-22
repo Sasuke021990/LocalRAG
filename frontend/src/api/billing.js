@@ -6,3 +6,6 @@ export const fetchPlans = () => request('/billing/plans')
 export const fetchSubscription = () => request('/billing/subscription')
 export const checkout = (plan) => request('/billing/checkout', jsonBody('POST', { plan }))
 export const cancelSubscription = () => request('/billing/cancel', { method: 'POST' })
+
+// Customize-plan enquiry (contact-us). { name, email, company?, message? }
+export const submitContact = (lead) => request('/billing/contact', jsonBody('POST', lead))

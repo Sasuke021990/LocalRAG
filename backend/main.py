@@ -497,6 +497,11 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
     5. **Cache result** — store in Redis for future identical queries
     """
     try:
+        # Daily AI-question quota (per plan). Checked before work, counted after
+        # dispatch so a rejected request never consumes a question.
+        quota.check_ai_question_allowed(ingestion_pipeline.redis_client, user_id)
+        quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
+
         start = asyncio.get_event_loop().time()
         result = await answer_pipeline.answer_query(
             user_id=user_id, query=request.query,
@@ -512,6 +517,8 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
             reasoning=result.get("reasoning", ""),
             refused=result.get("refused", False),
         )
+    except HTTPException:
+        raise  # e.g. the 429 quota error — must not become a 500
     except Exception as exc:
         logger.error(f"Query error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -526,6 +533,11 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(require_cur
     enabled) → ``token``* → ``done``. If the refusal gate trips, it's
     ``sources`` → ``refusal`` → ``done`` and the model is never called.
     """
+    # Daily AI-question quota — raised as a normal 429 *before* the SSE stream
+    # opens, so the client gets a clean HTTP error (not a mid-stream event).
+    quota.check_ai_question_allowed(ingestion_pipeline.redis_client, user_id)
+    quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
+
     async def _events():
         try:
             async for event, data in answer_pipeline.stream_answer(
