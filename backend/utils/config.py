@@ -133,6 +133,24 @@ class Config:
     SMTP_FROM: str = os.getenv('SMTP_FROM', 'noreply@vaultly.local')
     SMTP_USE_TLS: bool = os.getenv('SMTP_USE_TLS', 'True').lower() == 'true'
 
+    # === Billing / Plan limits (INR) — all overridable via env ===
+    # Per-plan storage allowances (GB).
+    FREE_STORAGE_GB: int = int(os.getenv('FREE_STORAGE_GB', 1))
+    PRO_STORAGE_GB: int = int(os.getenv('PRO_STORAGE_GB', 5))
+    MAX_STORAGE_GB: int = int(os.getenv('MAX_STORAGE_GB', 15))
+    # Per-user AI question allowance per day. Max is "unlimited plan-wide" but
+    # still capped per individual user (matters for shared/team plans).
+    FREE_AI_QUESTIONS_PER_DAY: int = int(os.getenv('FREE_AI_QUESTIONS_PER_DAY', 10))
+    PRO_AI_QUESTIONS_PER_DAY: int = int(os.getenv('PRO_AI_QUESTIONS_PER_DAY', 25))
+    MAX_AI_QUESTIONS_PER_DAY_PER_USER: int = int(os.getenv('MAX_AI_QUESTIONS_PER_DAY_PER_USER', 30))
+    # Prices in whole rupees.
+    PRO_PRICE_MONTHLY_INR: int = int(os.getenv('PRO_PRICE_MONTHLY_INR', 59))
+    PRO_PRICE_ANNUAL_INR: int = int(os.getenv('PRO_PRICE_ANNUAL_INR', 600))
+    MAX_PRICE_MONTHLY_INR: int = int(os.getenv('MAX_PRICE_MONTHLY_INR', 79))
+    MAX_PRICE_ANNUAL_INR: int = int(os.getenv('MAX_PRICE_ANNUAL_INR', 800))
+    # Max team members that can share a Max-plan workspace.
+    MAX_PLAN_TEAM_MEMBERS: int = int(os.getenv('MAX_PLAN_TEAM_MEMBERS', 5))
+
     @classmethod
     def validate(cls):
         """

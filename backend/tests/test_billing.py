@@ -15,17 +15,37 @@ class TestPlanCatalog:
         assert plans.DEFAULT_PLAN == "free"
         assert plans.is_valid_plan("free")
         assert plans.is_valid_plan("pro")
-        assert plans.is_valid_plan("business")
+        assert plans.is_valid_plan("max")
+        assert plans.is_valid_plan("customize")
 
     def test_unknown_plan_invalid(self):
         assert not plans.is_valid_plan("enterprise")
+        assert not plans.is_valid_plan("business")  # renamed to 'max'
         assert not plans.is_valid_plan("")
 
     def test_quota_increases_with_tier(self):
-        assert plans.quota_for("free") < plans.quota_for("pro") < plans.quota_for("business")
+        assert plans.quota_for("free") < plans.quota_for("pro") < plans.quota_for("max")
 
     def test_quota_for_unknown_falls_back_to_default(self):
         assert plans.quota_for("nonsense") == plans.quota_for(plans.DEFAULT_PLAN)
+
+    def test_ai_question_limits_per_tier(self):
+        assert plans.ai_questions_per_day_for("free") == 10
+        assert plans.ai_questions_per_day_for("pro") == 25
+        assert plans.ai_questions_per_day_for("max") == 30
+
+    def test_feature_gating_flags(self):
+        assert not plans.has_feature("free", "webhooks")
+        assert plans.has_feature("pro", "webhooks")
+        assert plans.has_feature("max", "priority_processing")
+        assert plans.features_for("max")["team_members"] >= 5
+
+    def test_customize_is_contact_only(self):
+        assert plans.is_self_serve("free")
+        assert plans.is_self_serve("pro")
+        assert plans.is_self_serve("max")
+        assert not plans.is_self_serve("customize")
+        assert plans.PLANS["customize"]["price_inr_monthly"] is None
 
 
 class TestPlanStore:
@@ -46,7 +66,7 @@ class TestPlanStore:
             billing_store.set_plan(redis_client, test_user, "enterprise")
 
     def test_downgrade_restores_free_quota(self, redis_client, test_user):
-        billing_store.set_plan(redis_client, test_user, "business")
+        billing_store.set_plan(redis_client, test_user, "max")
         billing_store.set_plan(redis_client, test_user, "free")
         assert billing_store.get_plan(redis_client, test_user) == "free"
         assert int(redis_client.hget(f"user:{test_user}", "storage_quota_bytes")) == plans.quota_for("free")
@@ -78,7 +98,7 @@ class TestBillingRoutes:
         _signup(billing_client)
         body = billing_client.get("/billing/plans").json()
         ids = {p["id"] for p in body["plans"]}
-        assert ids == {"free", "pro", "business"}
+        assert ids == {"free", "pro", "max", "customize"}
 
     def test_subscription_defaults_to_free(self, billing_client):
         _signup(billing_client)
@@ -102,9 +122,16 @@ class TestBillingRoutes:
         _signup(billing_client)
         assert billing_client.post("/billing/checkout", json={"plan": "enterprise"}).status_code == 400
 
+    def test_checkout_rejects_contact_only_customize(self, billing_client):
+        _signup(billing_client)
+        # Customize is a valid plan but not self-serve — checkout must refuse it.
+        resp = billing_client.post("/billing/checkout", json={"plan": "customize"})
+        assert resp.status_code == 400
+        assert billing_client.get("/billing/subscription").json()["plan"] == "free"
+
     def test_cancel_downgrades_to_free(self, billing_client):
         _signup(billing_client)
-        billing_client.post("/billing/checkout", json={"plan": "business"})
+        billing_client.post("/billing/checkout", json={"plan": "max"})
         resp = billing_client.post("/billing/cancel")
         assert resp.status_code == 200
         assert resp.json()["plan"] == "free"
