@@ -33,7 +33,9 @@ def build_authorization_url(state: str) -> str:
 def exchange_code_for_userinfo(code: str) -> dict:
     """
     Exchanges an authorization code for Google user info.
-    Returns {"sub": <google user id>, "email": <email>}.
+    Returns {"sub": <google user id>, "email": <email>, "name": <display name, may be "">}.
+    ``name`` comes from the ``profile`` scope already requested above; falls
+    back to "" (caller derives a username from the email) if Google omits it.
     Raises HTTPException(400) if the exchange or userinfo fetch fails.
     """
     token_resp = requests.post(
@@ -68,4 +70,4 @@ def exchange_code_for_userinfo(code: str) -> dict:
     if "sub" not in data or "email" not in data:
         raise HTTPException(status_code=400, detail="Failed to fetch Google userinfo")
 
-    return {"sub": data["sub"], "email": data["email"]}
+    return {"sub": data["sub"], "email": data["email"], "name": data.get("name", "")}

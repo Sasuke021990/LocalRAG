@@ -37,6 +37,7 @@ CACHE_PREFIX = "semantic_cache:"  # matches SemanticCache's production default
 def _cast_user(raw: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     return {
         "user_id": user_id,
+        "username": raw.get("username", ""),
         "email": raw.get("email", ""),
         "created_at": raw.get("created_at", ""),
         "storage_used_bytes": int(raw.get("storage_used_bytes", 0)),

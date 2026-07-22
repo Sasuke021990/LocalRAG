@@ -63,9 +63,9 @@ possible.
 
 ## B. Chat experience — P1
 
-- [ ] **Pool-selection popup** — clicking "open chat" / "ask a question" shows a modal listing available pools; user must pick one to continue. **Replaces** the inline pool dropdown currently in the Chat page header (confirmed 2026-07-22) — remove that dropdown once the popup lands; consider a small "change pool" affordance if users need to switch mid-conversation.
-- [ ] **Conversational memory** — every question is currently answered with zero memory of prior turns in the same chat; a follow-up like "what about the express option?" has no context. Needs prior turns threaded into the grounding prompt.
-- [ ] **Server-side chat history/persistence** — conversations currently live only in browser memory; a refresh loses everything. Need saved conversations, resume, rename, delete.
+- [x] **Pool-selection popup** — opens automatically every time the Chat page is entered (Dashboard's "Open chat" / "Ask a question", nav link), listing pools + "All pools"; dismissing without a pick defaults to "All pools" rather than trapping the user. **Replaced** the inline dropdown with a small pill in the header that reopens the same popup to switch pools mid-conversation.
+- [x] **Conversational memory** — prior turns (last 3 exchanges, each truncated to 500 chars) are threaded into the prompt for both LLM backends (`grounding.trim_history`/`chat_messages`/`format_chat_prompt`), so follow-ups like "what about the express option?" resolve correctly from context. Verified end-to-end with a follow-up carrying zero topic words.
+- [x] **Server-side chat history/persistence** — new `backend/chat/` module: Redis-backed conversations (sorted-set index, not a `KEYS` scan — see the reliability item below this was written to avoid), `/chat/conversations` CRUD, auto-created on the first message of a new chat. Frontend gets a resumable sidebar (`ConversationSidebar.vue`): list, open, inline rename, delete-with-confirm, "New chat".
 - [ ] Citation click-to-preview — click `[1]` to see the exact source passage/doc
 - [ ] Answer feedback (👍/👎) — eval signal, surfaces bad answers to admins
 
@@ -75,6 +75,7 @@ possible.
 - [ ] Replace O(N) `KEYS` scans on hot paths (`list_documents`, cache stats, BM25 auto-load) with maintained index sets or `SCAN`
 - [ ] Rate limiting on auth and query endpoints (currently open to abuse)
 - [ ] Observability: structured logging, error tracking, metrics
+- [ ] **Vector index doesn't reliably survive a Redis restart** — discovered 2026-07-22 while testing conversational memory: `docker compose restart` (which also restarts Redis) silently dropped the `idx:chunks` RediSearch index while the underlying `chunk:*`/`document:*` data survived fine (plain Redis types round-trip through AOF correctly; the RediSearch index definition apparently doesn't, at least not reliably). Retrieval then returns **empty results with no error** — chat looks "broken" (refuses everything) with nothing in the logs pointing at the real cause unless you go looking for `KNN vector search failed: idx:chunks: no such index`. `ensure_index()` only runs at backend process startup, so it doesn't self-heal until the backend is *also* restarted after Redis. Fix ideas: have `/health` (or a startup check) verify the index exists and (re)call `ensure_index()` proactively; or have `vector_index.knn_search()` itself detect "no such index" and recreate + retry once rather than silently returning `[]`.
 
 ## D. Security hardening — P1
 
@@ -106,8 +107,8 @@ Mobile is missing everything web just got:
 
 ## H. Account & Session — P1
 
-- [ ] **Idle session timeout with renewal popup** — after 1 minute of no activity in the app/web (configurable via env, e.g. `SESSION_IDLE_TIMEOUT_SECONDS`, default 60), show a "still there? continue session" popup. Confirm → refresh/extend the session. No response / decline → log out. Confirmed 2026-07-22: 1 minute is the real intended default, must be configurable.
-- [ ] **Signup captures Username** — `SignupRequest` currently only has `email` + `password` (`backend/auth/schemas.py`); add `username`, store it (`auth/store.py` `create_user`), surface it in the UI (header, admin panel, audit log identity) instead of just email.
+- [x] **Idle session timeout with renewal popup** — `SESSION_IDLE_TIMEOUT_SECONDS` (default 60, env-configurable), exposed via `/auth/me`. Frontend tracks activity app-wide (`AppShell.vue`); idle past the timeout shows "Still there?"; unanswered for another full window → auto logout; "Continue session" resets the timer. Resolves only via its own buttons/backdrop, not incidental page activity, so it can't flicker open and vanish.
+- [x] **Signup captures Username** — form requires it; API accepts it optionally (falls back to the email's local part server-side, so other API callers stay compatible); Google OAuth signup uses Google's profile name. Surfaced in the header, Dashboard greeting, and admin user list (still shows email alongside).
 
 ## I. UI Polish & Micro-interactions — P2
 

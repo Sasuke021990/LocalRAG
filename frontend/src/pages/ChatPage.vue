@@ -2,11 +2,17 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { streamQuery } from '../api/query.js'
 import { fetchDocuments, fetchPools } from '../api/documents.js'
+import * as chatApi from '../api/chat.js'
+import { useToastStore } from '../stores/toast.js'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import IconChip from '../components/ui/IconChip.vue'
+import Modal from '../components/ui/Modal.vue'
 import ChatMessage from '../components/ChatMessage.vue'
-import { Sparkles, Send } from 'lucide-vue-next'
+import ConversationSidebar from '../components/ConversationSidebar.vue'
+import { Sparkles, Send, Boxes, ChevronDown, Check } from 'lucide-vue-next'
+
+const toast = useToastStore()
 
 const query = ref('')
 const history = ref([])
@@ -14,20 +20,119 @@ const loading = ref(false)
 const listEnd = ref(null)
 const documents = ref([])
 const pools = ref([])
-const selectedPool = ref('')   // '' = search across all pools
+const selectedPool = ref('')      // '' = search across all pools
+const poolChosen = ref(false)     // has the user made an explicit choice (incl. "All pools") yet
+const poolPopupOpen = ref(false)
+
+const conversations = ref([])
+const conversationsLoading = ref(true)
+const activeConversationId = ref('')   // '' = not-yet-saved new chat
 
 // Fixed retrieval depth: fetch 40 candidates, rerank, keep the top 20 passages.
 const RETRIEVE_K = 20
 
-// Load the user's documents (for tailored prompts) and pools (for the picker).
+async function loadConversations() {
+  try {
+    conversations.value = (await chatApi.listConversations()).conversations || []
+  } catch (_) { /* sidebar just stays empty */ }
+  finally { conversationsLoading.value = false }
+}
+
+// Load the user's documents (for tailored prompts), pools (for the picker),
+// and the conversation list, then gate entry behind the pool-selection popup
+// — replaces the old always-visible inline dropdown. Re-opens every time a
+// brand-new chat is started (page entry, or "New chat").
 onMounted(async () => {
   try {
     documents.value = (await fetchDocuments()).documents || []
   } catch (_) { /* no docs / not ready — fall back to the generic prompts */ }
   try {
     pools.value = (await fetchPools()).pools || []
-  } catch (_) { /* no pools yet — the picker just shows "All pools" */ }
+  } catch (_) { /* no pools yet — the popup still offers "All pools" */ }
+  loadConversations()
+  poolPopupOpen.value = true
 })
+
+// Reconstruct display exchanges (one bubble-pair per turn) from the stored
+// flat user/assistant message list.
+function messagesToExchanges(messages) {
+  const out = []
+  let pendingUser = null
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      pendingUser = msg
+    } else if (msg.role === 'assistant') {
+      out.push({
+        query: pendingUser?.content || '',
+        answer: msg.content,
+        reasoning: msg.reasoning || '',
+        sources: msg.sources || [],
+        refused: !!msg.refused,
+        streaming: false,
+        processingTime: undefined,
+        queryPool: '',
+      })
+      pendingUser = null
+    }
+  }
+  return out
+}
+
+function newChat() {
+  if (loading.value) return
+  activeConversationId.value = ''
+  history.value = []
+  selectedPool.value = ''
+  poolChosen.value = false
+  poolPopupOpen.value = true
+}
+
+async function openConversation(conv) {
+  if (loading.value || conv.id === activeConversationId.value) return
+  try {
+    const detail = await chatApi.getConversation(conv.id)
+    activeConversationId.value = detail.id
+    history.value = messagesToExchanges(detail.messages)
+    selectedPool.value = detail.pool || ''
+    poolChosen.value = true
+    poolPopupOpen.value = false
+    scrollDown()
+  } catch (e) {
+    toast.push(e.message || 'Could not open conversation', 'error')
+  }
+}
+
+async function renameConv(conv, title) {
+  try {
+    await chatApi.renameConversation(conv.id, title)
+    const item = conversations.value.find((c) => c.id === conv.id)
+    if (item) item.title = title
+  } catch (e) {
+    toast.push(e.message || 'Could not rename conversation', 'error')
+  }
+}
+
+async function deleteConv(conv) {
+  try {
+    await chatApi.deleteConversation(conv.id)
+    conversations.value = conversations.value.filter((c) => c.id !== conv.id)
+    if (activeConversationId.value === conv.id) newChat()
+  } catch (e) {
+    toast.push(e.message || 'Could not delete conversation', 'error')
+  }
+}
+
+function choosePool(name) {
+  selectedPool.value = name
+  poolChosen.value = true
+  poolPopupOpen.value = false
+}
+
+// Dismissing without an explicit pick (backdrop click / X) is treated as
+// choosing "All pools" — never leaves the user stuck with no way in.
+function dismissPoolPopup() {
+  choosePool(selectedPool.value)
+}
 
 // Quick-start prompt chips, tailored to the selected pool: "Summarise <doc>"
 // for docs in that pool (all pools when none is selected), then a few prompts.
@@ -72,7 +177,10 @@ function submit() {
   const started = performance.now()
   scrollDown()
 
-  streamQuery(q, { topK: RETRIEVE_K * 2, rerankTopK: RETRIEVE_K, pool: selectedPool.value }, {
+  streamQuery(q, {
+    topK: RETRIEVE_K * 2, rerankTopK: RETRIEVE_K, pool: selectedPool.value,
+    conversationId: activeConversationId.value,
+  }, {
     onSources: (list) => { m.sources = list },
     onThinking: (t) => { m.reasoning += t; scrollDown() },
     onToken: (t) => { m.answer += t; scrollDown() },
@@ -84,6 +192,8 @@ function submit() {
       m.streaming = false
       m.processingTime = data.cached ? 0 : (performance.now() - started) / 1000
       loading.value = false
+      if (data.conversation_id) activeConversationId.value = data.conversation_id
+      loadConversations()
       scrollDown()
     },
     onError: (err) => {
@@ -96,26 +206,30 @@ function submit() {
 </script>
 
 <template>
-  <div class="flex flex-col gap-6 h-[calc(100vh-9rem)]">
+  <div class="flex gap-4 h-[calc(100vh-9rem)]">
+    <ConversationSidebar
+      class="hidden md:flex"
+      :conversations="conversations" :active-id="activeConversationId" :loading="conversationsLoading"
+      @select="openConversation" @new-chat="newChat" @rename="renameConv" @delete="deleteConv"
+    />
+
+    <div class="flex-1 min-w-0 flex flex-col gap-6">
     <div class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-bold font-display text-ink">Chat</h1>
         <p class="text-ink-soft text-sm">Answers come only from your documents.</p>
       </div>
-      <div class="flex items-center gap-2">
-        <!-- Restrict the model to one knowledge pool (or search across all). -->
-        <label class="text-sm text-ink-soft">Pool</label>
-        <select
-          v-model="selectedPool"
-          title="Which knowledge pool to search"
-          class="rounded-xl border border-border-subtle bg-surface px-3 py-2 text-sm text-ink-soft focus:border-indigo cursor-pointer max-w-48"
-        >
-          <option value="">All pools</option>
-          <option v-for="p in pools" :key="p.name" :value="p.name">
-            {{ p.name }} ({{ p.document_count }})
-          </option>
-        </select>
-      </div>
+      <!-- Shows the current scope; click to switch pools mid-conversation
+           (reopens the same popup shown on entry). -->
+      <button
+        type="button" title="Change knowledge pool"
+        class="flex items-center gap-1.5 rounded-xl border border-border-subtle bg-surface px-3 py-2 text-sm text-ink-soft hover:border-indigo hover:text-indigo transition cursor-pointer"
+        @click="poolPopupOpen = true"
+      >
+        <Boxes class="w-4 h-4" />
+        {{ selectedPool || 'All pools' }}
+        <ChevronDown class="w-3.5 h-3.5" />
+      </button>
     </div>
 
     <div class="flex-1 overflow-y-auto flex flex-col gap-6 pr-1">
@@ -130,7 +244,7 @@ function submit() {
     </div>
 
     <!-- Quick-start prompt chips (tailored to the user's documents) -->
-    <div v-if="suggestions.length" class="shrink-0 flex gap-2 overflow-x-auto pb-0.5">
+    <div v-if="poolChosen && suggestions.length" class="shrink-0 flex gap-2 overflow-x-auto pb-0.5">
       <button
         v-for="(s, i) in suggestions" :key="i"
         type="button" :disabled="loading" @click="useSuggestion(s)"
@@ -152,5 +266,42 @@ function submit() {
         </Button>
       </form>
     </Card>
+    </div>
+
+    <!-- Pool-selection popup: shown on entry, and again via the pill above to
+         switch pools mid-conversation. Dismissing without a pick keeps/defaults
+         to "All pools" rather than trapping the user. -->
+    <Modal :open="poolPopupOpen" title="Choose a knowledge pool" @close="dismissPoolPopup">
+      <p class="text-sm text-ink-soft mb-4">
+        Vaultly will search only this pool while you chat. You can switch anytime.
+      </p>
+      <div class="flex flex-col gap-2 max-h-80 overflow-y-auto">
+        <button
+          type="button"
+          class="flex items-center justify-between gap-2 rounded-xl border px-4 py-3 text-left transition cursor-pointer"
+          :class="selectedPool === '' ? 'border-indigo bg-indigo/5' : 'border-border-subtle hover:border-indigo/40'"
+          @click="choosePool('')"
+        >
+          <span class="text-sm font-medium text-ink">All pools</span>
+          <Check v-if="selectedPool === ''" class="w-4 h-4 text-indigo shrink-0" />
+        </button>
+        <button
+          v-for="p in pools" :key="p.name"
+          type="button"
+          class="flex items-center justify-between gap-2 rounded-xl border px-4 py-3 text-left transition cursor-pointer"
+          :class="selectedPool === p.name ? 'border-indigo bg-indigo/5' : 'border-border-subtle hover:border-indigo/40'"
+          @click="choosePool(p.name)"
+        >
+          <span class="text-sm font-medium text-ink truncate">{{ p.name }}</span>
+          <span class="flex items-center gap-2 shrink-0">
+            <span class="text-xs text-ink-muted">{{ p.document_count }} doc{{ p.document_count === 1 ? '' : 's' }}</span>
+            <Check v-if="selectedPool === p.name" class="w-4 h-4 text-indigo" />
+          </span>
+        </button>
+        <p v-if="pools.length === 0" class="text-sm text-ink-muted text-center py-3">
+          No pools yet — "All pools" works fine until you create one.
+        </p>
+      </div>
+    </Modal>
   </div>
 </template>

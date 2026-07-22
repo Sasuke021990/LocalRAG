@@ -66,6 +66,7 @@ async def stream_answer(
     semantic_cache,
     llm,
     pool: str = None,
+    history: List[Dict[str, str]] = None,
 ) -> AsyncIterator[Tuple[str, Any]]:
     # Cache is scoped per (user, pool): the same question answered against a
     # different pool must not serve a cross-pool cached answer.
@@ -125,15 +126,20 @@ async def stream_answer(
         yield ("done", {"answer": answer, "reasoning": "", "sources": sources, "refused": False, "cached": False})
         return
 
-    # 4b. Grounded generation.
+    # 4b. Grounded generation. Prior turns (already trimmed to a bounded
+    # window/length here — the caller passes raw stored history) give the
+    # model conversational continuity for follow-ups like "what about X?";
+    # the system prompt's context passages are still freshly retrieved for
+    # *this* turn's query, same as before.
     system_prompt = grounding.build_system_prompt(
         [s["content"] for s in sources], thinking=config.LLM_THINKING_ENABLED,
     )
+    trimmed_history = grounding.trim_history(history)
     splitter = grounding.ThinkingStreamSplitter()
     answer_parts: List[str] = []
     reasoning_parts: List[str] = []
 
-    async for token in llm.generate_stream(system_prompt, query):
+    async for token in llm.generate_stream(system_prompt, query, trimmed_history):
         for phase, text in splitter.feed(token):
             if phase == "thinking":
                 reasoning_parts.append(text)
@@ -163,12 +169,13 @@ async def stream_answer(
     yield ("done", {"answer": answer, "reasoning": reasoning, "sources": sources, "refused": False, "cached": False})
 
 
-async def answer_query(*, user_id, query, top_k, rerank_top_k, hybrid_search, reranker, semantic_cache, llm, pool=None) -> Dict[str, Any]:
+async def answer_query(*, user_id, query, top_k, rerank_top_k, hybrid_search, reranker, semantic_cache, llm, pool=None, history=None) -> Dict[str, Any]:
     """Non-streaming: drain ``stream_answer`` into a final dict."""
     final = {"answer": "", "reasoning": "", "sources": [], "refused": False}
     async for event, data in stream_answer(
         user_id=user_id, query=query, top_k=top_k, rerank_top_k=rerank_top_k,
         hybrid_search=hybrid_search, reranker=reranker, semantic_cache=semantic_cache, llm=llm, pool=pool,
+        history=history,
     ):
         if event == "done":
             final = {k: data[k] for k in ("answer", "reasoning", "sources", "refused")}

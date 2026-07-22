@@ -20,7 +20,7 @@ class _Result:
 
 class FakeSearch:
     def __init__(self, results): self._results = results
-    def search(self, user_id, query, top_k): return self._results
+    def search(self, user_id, query, top_k, pool=None): return self._results
 
 
 class FakeReranker:
@@ -38,15 +38,18 @@ class FakeCache:
 
 
 class FakeLLM:
-    """Streams a canned output; records whether it was called (for gate tests)."""
+    """Streams a canned output; records whether it was called (for gate tests)
+    and the last history it was given (for conversational-memory tests)."""
     def __init__(self, output="", ready=True):
         self.output = output
         self._ready = ready
         self.called = False
+        self.last_history = None
     @property
     def ready(self): return self._ready
-    async def generate_stream(self, system, user):
+    async def generate_stream(self, system, user, history=None):
         self.called = True
+        self.last_history = history
         for tok in self.output:   # yield char by char to exercise streaming
             yield tok
 
@@ -165,6 +168,58 @@ class TestGeneration:
         done = events[-1][1]
         assert done["cached"] is True
         assert done["answer"] == "cached answer"
+
+
+@pytest.mark.anyio
+class TestConversationalMemory:
+    async def test_history_reaches_the_llm_trimmed(self):
+        llm = FakeLLM("answer")
+        history = [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+        ]
+        await _drain(**_base(llm=llm, history=history))
+        assert llm.last_history == [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+        ]
+
+    async def test_no_history_passes_none_through(self):
+        llm = FakeLLM("answer")
+        await _drain(**_base(llm=llm))  # no history kwarg
+        assert llm.last_history == []
+
+    async def test_history_keeps_only_last_three_exchanges(self):
+        llm = FakeLLM("answer")
+        # 5 exchanges (10 messages) — only the last 3 (6 messages) should reach the LLM.
+        history = []
+        for i in range(5):
+            history.append({"role": "user", "content": f"q{i}"})
+            history.append({"role": "assistant", "content": f"a{i}"})
+        await _drain(**_base(llm=llm, history=history))
+        assert len(llm.last_history) == 6
+        assert llm.last_history[0]["content"] == "q2"
+        assert llm.last_history[-1]["content"] == "a4"
+
+    async def test_history_messages_truncated_to_char_budget(self):
+        llm = FakeLLM("answer")
+        long_answer = "x" * 1000
+        history = [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": long_answer},
+        ]
+        await _drain(**_base(llm=llm, history=history))
+        assert len(llm.last_history[-1]["content"]) <= 502  # 500 chars + " …"
+
+    async def test_history_not_sent_on_cache_hit(self):
+        # No generation happens on a cache hit, so history is irrelevant/unused —
+        # just confirm passing it doesn't break the cache-hit short-circuit.
+        llm = FakeLLM("should not run")
+        cache = FakeCache(hit=[{"answer": "cached", "sources": [], "reasoning": ""}])
+        history = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
+        events = await _drain(**_base(semantic_cache=cache, llm=llm, history=history))
+        assert llm.called is False
+        assert events[-1][1]["answer"] == "cached"
 
 
 @pytest.fixture

@@ -28,6 +28,31 @@ class TestSignupLoginMe:
         resp = auth_client.post("/auth/signup", json={"email": "carol@example.com", "password": "otherpassword"})
         assert resp.status_code == 409
 
+    def test_signup_captures_username(self, auth_client):
+        resp = auth_client.post(
+            "/auth/signup",
+            json={"username": "Alice W", "email": "aliceusername@example.com", "password": "longenough123"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "Alice W"
+        assert auth_client.get("/auth/me").json()["username"] == "Alice W"
+
+    def test_signup_without_username_falls_back_to_email_local_part(self, auth_client):
+        resp = auth_client.post(
+            "/auth/signup", json={"email": "nouser@example.com", "password": "longenough123"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "nouser"
+
+    def test_signup_and_me_expose_idle_timeout(self, auth_client):
+        from utils.config import config
+        resp = auth_client.post(
+            "/auth/signup", json={"email": "idletest@example.com", "password": "longenough123"},
+        )
+        assert resp.json()["idle_timeout_seconds"] == config.SESSION_IDLE_TIMEOUT_SECONDS
+        me = auth_client.get("/auth/me")
+        assert me.json()["idle_timeout_seconds"] == config.SESSION_IDLE_TIMEOUT_SECONDS
+
     def test_login_wrong_password_401(self, auth_client):
         auth_client.post("/auth/signup", json={"email": "dave@example.com", "password": "longenough123"})
         resp = auth_client.post("/auth/login", json={"email": "dave@example.com", "password": "wrongpassword"})

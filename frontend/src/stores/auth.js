@@ -29,8 +29,8 @@ export const useAuthStore = defineStore('auth', {
       this.checked = true
       this._sync()
     },
-    async signup(email, password) {
-      this.user = await authApi.signup(email, password)
+    async signup(username, email, password) {
+      this.user = await authApi.signup(username, email, password)
       this.checked = true
       this._sync()
     },

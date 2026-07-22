@@ -41,8 +41,15 @@ def _reset_token_key(token: str) -> str:
     return f"password_reset:{token}"
 
 
-def create_user(redis_client, email: str, password_hash: str = "", google_sub: str = "") -> str:
-    """Create a new user. Raises ValueError if the email is already registered."""
+def create_user(
+    redis_client, email: str, password_hash: str = "", google_sub: str = "", username: str = ""
+) -> str:
+    """
+    Create a new user. Raises ValueError if the email is already registered.
+    ``username`` falls back to the email's local part (before ``@``) when not
+    given — e.g. for the Google OAuth path when Google didn't return a name,
+    and for the default-admin seed.
+    """
     if redis_client.exists(_email_index_key(email)):
         raise ValueError("email already registered")
 
@@ -50,6 +57,7 @@ def create_user(redis_client, email: str, password_hash: str = "", google_sub: s
     redis_client.hset(
         _user_key(user_id),
         mapping={
+            "username": (username or "").strip() or email.split("@")[0],
             "email": email,
             "password_hash": password_hash,
             "google_sub": google_sub,

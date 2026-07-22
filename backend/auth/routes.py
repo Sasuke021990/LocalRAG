@@ -53,6 +53,7 @@ def _is_effective_admin(user: dict) -> bool:
 def _user_out(user: dict, token: str) -> AuthResponse:
     return AuthResponse(
         user_id=user["user_id"],
+        username=user.get("username", ""),
         email=user["email"],
         storage_used_bytes=user["storage_used_bytes"],
         storage_quota_bytes=user["storage_quota_bytes"],
@@ -68,7 +69,8 @@ async def signup(body: SignupRequest, response: Response):
         raise HTTPException(status_code=403, detail="Public signups are currently disabled")
     try:
         user_id = store.create_user(
-            redis_client, body.email, password_hash=passwords.hash_password(body.password)
+            redis_client, body.email, password_hash=passwords.hash_password(body.password),
+            username=body.username,
         )
     except ValueError:
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -128,6 +130,7 @@ async def me(user_id: str = Depends(require_current_user)):
         raise HTTPException(status_code=401, detail="User not found")
     return UserOut(
         user_id=user["user_id"],
+        username=user.get("username", ""),
         email=user["email"],
         storage_used_bytes=user["storage_used_bytes"],
         storage_quota_bytes=user["storage_quota_bytes"],
@@ -159,7 +162,10 @@ def _resolve_google_user(userinfo: dict) -> dict:
         if user is not None:
             store.link_google_account(redis_client, user["user_id"], userinfo["sub"])
         else:
-            user_id = store.create_user(redis_client, email=userinfo["email"], google_sub=userinfo["sub"])
+            user_id = store.create_user(
+                redis_client, email=userinfo["email"], google_sub=userinfo["sub"],
+                username=userinfo.get("name", ""),
+            )
             user = store.get_user_by_id(redis_client, user_id)
     return user
 

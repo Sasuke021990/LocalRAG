@@ -1,6 +1,7 @@
 import { request, jsonBody } from './client.js'
 
-export const signup = (email, password) => request('/auth/signup', jsonBody('POST', { email, password }))
+export const signup = (username, email, password) =>
+  request('/auth/signup', jsonBody('POST', { username, email, password }))
 export const login = (email, password) => request('/auth/login', jsonBody('POST', { email, password }))
 export const logout = () => request('/auth/logout', { method: 'POST' })
 export const getCurrentUser = () => request('/auth/me')

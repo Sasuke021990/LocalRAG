@@ -25,13 +25,28 @@ class TestExchangeCodeForUserinfo:
         def fake_get(url, headers=None, timeout=None):
             assert url == google_oauth.USERINFO_ENDPOINT
             assert headers["Authorization"] == "Bearer fake-access-token"
-            return _FakeResponse(200, {"sub": "google-sub-123", "email": "user@example.com"})
+            return _FakeResponse(200, {"sub": "google-sub-123", "email": "user@example.com", "name": "User Name"})
 
         monkeypatch.setattr(google_oauth.requests, "post", fake_post)
         monkeypatch.setattr(google_oauth.requests, "get", fake_get)
 
         result = google_oauth.exchange_code_for_userinfo("some-code")
-        assert result == {"sub": "google-sub-123", "email": "user@example.com"}
+        assert result == {"sub": "google-sub-123", "email": "user@example.com", "name": "User Name"}
+
+    def test_missing_name_defaults_to_empty_string(self, monkeypatch):
+        # Google's userinfo response doesn't always include "name" — the
+        # caller (auth.store.create_user) falls back to the email's local part.
+        def fake_post(url, data=None, timeout=None):
+            return _FakeResponse(200, {"access_token": "fake-access-token"})
+
+        def fake_get(url, headers=None, timeout=None):
+            return _FakeResponse(200, {"sub": "google-sub-456", "email": "noname@example.com"})
+
+        monkeypatch.setattr(google_oauth.requests, "post", fake_post)
+        monkeypatch.setattr(google_oauth.requests, "get", fake_get)
+
+        result = google_oauth.exchange_code_for_userinfo("some-code")
+        assert result["name"] == ""
 
     def test_token_exchange_failure_raises(self, monkeypatch):
         monkeypatch.setattr(

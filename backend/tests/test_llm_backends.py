@@ -62,6 +62,26 @@ class TestOpenAIStreaming:
         assert roles == ["system", "user"]
         assert captured["json"]["stream"] is True
 
+    async def test_history_spliced_between_system_and_current_user(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_ENABLED", True)
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, stream=None, timeout=None):
+            captured["json"] = json
+            return _FakeStreamResponse(["ok"])
+
+        monkeypatch.setattr(llm_module.requests, "post", fake_post)
+        backend = llm_module.OpenAICompatibleLLM()
+        history = [{"role": "user", "content": "earlier q"}, {"role": "assistant", "content": "earlier a"}]
+
+        [t async for t in backend.generate_stream("system rules", "the question", history)]
+
+        msgs = captured["json"]["messages"]
+        assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
+        assert msgs[1]["content"] == "earlier q"
+        assert msgs[2]["content"] == "earlier a"
+        assert msgs[3]["content"] == "the question"
+
     async def test_disabled_yields_nothing(self, monkeypatch):
         monkeypatch.setattr(config, "LLM_ENABLED", False)
         backend = llm_module.OpenAICompatibleLLM()

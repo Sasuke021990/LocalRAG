@@ -36,6 +36,8 @@ from auth import store as auth_store
 from billing import routes as billing_routes
 from auth.dependencies import require_current_user
 from auth.redis_client import redis_client as auth_redis_client
+from chat import routes as chat_routes
+from chat import store as chat_store
 from integrations import routes as integrations_routes
 from integrations import webhooks
 from generation import pipeline as answer_pipeline
@@ -87,6 +89,7 @@ app.include_router(auth_routes.router, prefix="/auth", tags=["Auth"])
 app.include_router(integrations_routes.router, prefix="/integrations", tags=["Integrations"])
 app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 app.include_router(billing_routes.router, prefix="/billing", tags=["Billing"])
+app.include_router(chat_routes.router, prefix="/chat", tags=["Chat"])
 
 
 # ─── Component initialisation ─────────────────────────────────────────────────
@@ -165,6 +168,11 @@ class QueryRequest(BaseModel):
     # Optional: restrict retrieval to a single knowledge pool. Blank/None
     # searches across all of the user's pools (the previous behaviour).
     pool: Optional[str] = None
+    # Optional: continue an existing conversation (adds it to that
+    # conversation's history and threads prior turns into the prompt).
+    # Blank/None starts a brand-new conversation (its id comes back in the
+    # response / the "done" SSE event).
+    conversation_id: Optional[str] = None
 
 class QueryResponse(BaseModel):
     answer: str
@@ -172,6 +180,7 @@ class QueryResponse(BaseModel):
     processing_time: float
     reasoning: str = ""
     refused: bool = False
+    conversation_id: str = ""
 
 class PoolCreate(BaseModel):
     name: str
@@ -485,6 +494,38 @@ async def upload_document(
 
 # ─── Query ────────────────────────────────────────────────────────────────────
 
+def _resolve_conversation(user_id: str, request: QueryRequest) -> Dict[str, Any]:
+    """
+    Fetch the conversation named by ``request.conversation_id``, or create a
+    new one (titled from the query text) when it's blank. Raises 404 if an
+    explicit id doesn't exist / isn't this user's.
+    """
+    if request.conversation_id:
+        conv = chat_store.get_conversation(auth_redis_client, user_id, request.conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return conv
+    return chat_store.create_conversation(
+        auth_redis_client, user_id, pool=request.pool or "", title=request.query[:60],
+    )
+
+
+def _history_from(conv: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Prior turns only (this conversation's messages *before* the current
+    one, which hasn't been appended yet) as the {role, content} shape the
+    generation pipeline expects."""
+    return [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
+
+
+def _persist_turn(user_id: str, conversation_id: str, query: str, result: Dict[str, Any], pool: Optional[str]) -> None:
+    chat_store.append_message(auth_redis_client, user_id, conversation_id, "user", query)
+    chat_store.append_message(
+        auth_redis_client, user_id, conversation_id, "assistant", result.get("answer", ""),
+        reasoning=result.get("reasoning", ""), sources=result.get("sources", []),
+        refused=result.get("refused", False), pool=pool or "",
+    )
+
+
 @app.post("/query", response_model=QueryResponse, tags=["Search"], summary="Hybrid search + re-rank + cache")
 async def query_documents(request: QueryRequest, user_id: str = Depends(require_current_user)):
     """
@@ -495,6 +536,10 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
     3. **Cross-encoder re-ranking** — re-score top-K with ``ms-marco-MiniLM-L-6-v2``
     4. **Answer assembly** — concatenate top chunks
     5. **Cache result** — store in Redis for future identical queries
+
+    Persists both the question and the answer to a conversation (created
+    automatically if ``conversation_id`` is omitted), and threads that
+    conversation's prior turns into the prompt for follow-up context.
     """
     try:
         # Daily AI-question quota (per plan). Checked before work, counted after
@@ -502,23 +547,29 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         quota.check_ai_question_allowed(ingestion_pipeline.redis_client, user_id)
         quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
 
+        conv = _resolve_conversation(user_id, request)
+        history = _history_from(conv)
+
         start = asyncio.get_event_loop().time()
         result = await answer_pipeline.answer_query(
             user_id=user_id, query=request.query,
             top_k=request.top_k, rerank_top_k=request.rerank_top_k,
             hybrid_search=hybrid_search, reranker=reranker,
             semantic_cache=semantic_cache, llm=local_llm,
-            pool=request.pool or None,
+            pool=request.pool or None, history=history,
         )
+        _persist_turn(user_id, conv["id"], request.query, result, request.pool)
+
         return QueryResponse(
             answer=result["answer"],
             sources=result["sources"],
             processing_time=asyncio.get_event_loop().time() - start,
             reasoning=result.get("reasoning", ""),
             refused=result.get("refused", False),
+            conversation_id=conv["id"],
         )
     except HTTPException:
-        raise  # e.g. the 429 quota error — must not become a 500
+        raise  # e.g. the 429 quota error, or a bad conversation_id — must not become a 500
     except Exception as exc:
         logger.error(f"Query error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -531,28 +582,44 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(require_cur
 
     Event sequence: ``sources`` (once) → ``thinking``* (only when thinking is
     enabled) → ``token``* → ``done``. If the refusal gate trips, it's
-    ``sources`` → ``refusal`` → ``done`` and the model is never called.
+    ``sources`` → ``refusal`` → ``done`` and the model is never called. The
+    ``done`` event's payload includes ``conversation_id`` (new or existing).
+
+    Persists both the question and the answer once the stream completes
+    successfully (nothing is saved if the stream errors out partway through),
+    and threads prior turns into the prompt for follow-up context.
     """
     # Daily AI-question quota — raised as a normal 429 *before* the SSE stream
     # opens, so the client gets a clean HTTP error (not a mid-stream event).
     quota.check_ai_question_allowed(ingestion_pipeline.redis_client, user_id)
     quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
 
+    conv = _resolve_conversation(user_id, request)
+    history = _history_from(conv)
+
     async def _events():
+        final_data = None
         try:
             async for event, data in answer_pipeline.stream_answer(
                 user_id=user_id, query=request.query,
                 top_k=request.top_k, rerank_top_k=request.rerank_top_k,
                 hybrid_search=hybrid_search, reranker=reranker,
                 semantic_cache=semantic_cache, llm=local_llm,
-                pool=request.pool or None,
+                pool=request.pool or None, history=history,
             ):
+                if event == "done":
+                    data = {**data, "conversation_id": conv["id"]}
+                    final_data = data
                 # JSON-encode every payload (even token strings) so the client
                 # parses uniformly and newlines never break SSE framing.
                 yield {"event": event, "data": json.dumps(data)}
         except Exception as exc:
             logger.error(f"Query stream error: {exc}")
             yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
+            return
+
+        if final_data:
+            _persist_turn(user_id, conv["id"], request.query, final_data, request.pool)
 
     return EventSourceResponse(_events())
 
