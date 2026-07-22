@@ -47,6 +47,14 @@ class TestPlanCatalog:
         assert not plans.is_self_serve("customize")
         assert plans.PLANS["customize"]["price_inr_monthly"] is None
 
+    def test_conversation_limits_per_tier(self):
+        assert plans.conversation_limit_for("free") == 5
+        assert plans.conversation_limit_for("pro") == 15
+        assert plans.conversation_limit_for("max") == 20
+
+    def test_conversation_limit_for_unknown_falls_back_to_default(self):
+        assert plans.conversation_limit_for("nonsense") == plans.conversation_limit_for(plans.DEFAULT_PLAN)
+
 
 class TestPlanStore:
     def test_new_user_defaults_to_free(self, redis_client, test_user):

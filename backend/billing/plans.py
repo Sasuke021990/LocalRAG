@@ -32,6 +32,7 @@ PLANS = {
         "ai_questions_per_day": config.FREE_AI_QUESTIONS_PER_DAY,
         "ai_unlimited_plan_wide": False,
         "contact_only": False,
+        "conversation_limit": config.FREE_CONVERSATION_LIMIT,
         "features": {
             "pools": True,
             "hybrid_chat": True,
@@ -51,6 +52,7 @@ PLANS = {
         "ai_questions_per_day": config.PRO_AI_QUESTIONS_PER_DAY,
         "ai_unlimited_plan_wide": False,
         "contact_only": False,
+        "conversation_limit": config.PRO_CONVERSATION_LIMIT,
         "features": {
             "pools": True,
             "hybrid_chat": True,
@@ -71,6 +73,7 @@ PLANS = {
         "ai_questions_per_day": config.MAX_AI_QUESTIONS_PER_DAY_PER_USER,
         "ai_unlimited_plan_wide": True,
         "contact_only": False,
+        "conversation_limit": config.MAX_CONVERSATION_LIMIT,
         "features": {
             "pools": True,
             "hybrid_chat": True,
@@ -92,6 +95,7 @@ PLANS = {
         "ai_questions_per_day": config.MAX_AI_QUESTIONS_PER_DAY_PER_USER,
         "ai_unlimited_plan_wide": True,
         "contact_only": True,
+        "conversation_limit": config.MAX_CONVERSATION_LIMIT,  # placeholder, mirrors Max
         "features": {
             "pools": True,
             "hybrid_chat": True,
@@ -126,6 +130,11 @@ def quota_for(plan: str) -> int:
 def ai_questions_per_day_for(plan: str) -> int:
     """Per-user daily AI-question allowance for a plan."""
     return PLANS.get(plan, PLANS[DEFAULT_PLAN])["ai_questions_per_day"]
+
+
+def conversation_limit_for(plan: str) -> int:
+    """Max saved conversations for a plan. <= 0 means unlimited."""
+    return PLANS.get(plan, PLANS[DEFAULT_PLAN])["conversation_limit"]
 
 
 def features_for(plan: str) -> dict:

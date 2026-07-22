@@ -131,3 +131,23 @@ def delete_conversation(redis_client, user_id: str, conversation_id: str) -> boo
     redis_client.delete(_key(user_id, conversation_id))
     redis_client.zrem(_index_key(user_id), conversation_id)
     return existed
+
+
+def enforce_conversation_limit(redis_client, user_id: str, limit: int) -> None:
+    """
+    Cap saved conversations per plan: if this user already has ``limit`` (or
+    more), delete the least-recently-touched one(s) — via the sorted index,
+    no KEYS/SCAN — so creating one more still respects the cap. Auto-evicts
+    silently (no blocking/upgrade nag); called right before creating a new
+    conversation. No-op if ``limit`` is falsy or <= 0 (unlimited).
+    """
+    if not limit or limit <= 0:
+        return
+    index_key = _index_key(user_id)
+    count = redis_client.zcard(index_key)
+    while count >= limit:
+        oldest = redis_client.zrange(index_key, 0, 0)  # ascending score = least-recently-touched
+        if not oldest:
+            break
+        delete_conversation(redis_client, user_id, oldest[0])
+        count -= 1

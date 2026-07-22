@@ -43,13 +43,6 @@ def _set_session_cookie(response: Response, user_id: str, token_version: int) ->
     return token
 
 
-def _is_effective_admin(user: dict) -> bool:
-    """Admin if the stored flag is set OR the email matches the env ADMIN_EMAIL."""
-    flag = bool(user.get("is_admin"))
-    env = bool(config.ADMIN_EMAIL) and user["email"].lower() == config.ADMIN_EMAIL.lower()
-    return flag or env
-
-
 def _user_out(user: dict, token: str) -> AuthResponse:
     return AuthResponse(
         user_id=user["user_id"],
@@ -58,7 +51,7 @@ def _user_out(user: dict, token: str) -> AuthResponse:
         storage_used_bytes=user["storage_used_bytes"],
         storage_quota_bytes=user["storage_quota_bytes"],
         plan=user.get("plan", "free"),
-        is_admin=_is_effective_admin(user),
+        is_admin=store.is_effective_admin(user),
         session_token=token,
     )
 
@@ -135,7 +128,7 @@ async def me(user_id: str = Depends(require_current_user)):
         storage_used_bytes=user["storage_used_bytes"],
         storage_quota_bytes=user["storage_quota_bytes"],
         plan=user.get("plan", "free"),
-        is_admin=_is_effective_admin(user),
+        is_admin=store.is_effective_admin(user),
     )
 
 

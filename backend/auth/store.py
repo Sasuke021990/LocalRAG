@@ -95,6 +95,27 @@ def get_user_by_id(redis_client, user_id: str) -> Optional[Dict[str, Any]]:
     return user
 
 
+def is_effective_admin(user: Optional[Dict[str, Any]]) -> bool:
+    """
+    True if `user` (an already-fetched dict, e.g. from ``get_user_by_id``) is
+    an admin/operator: either the stored ``is_admin`` flag is set, or their
+    email matches the operator account (``ADMIN_EMAIL``). Single source of
+    truth for "does this account get admin privileges" — used by the admin
+    panel gate, the AI-question-quota exemption, and the conversation-cap
+    exemption, so admin status is judged identically everywhere.
+    """
+    if not user:
+        return False
+    if user.get("is_admin"):
+        return True
+    return bool(config.ADMIN_EMAIL) and user.get("email", "").lower() == config.ADMIN_EMAIL.lower()
+
+
+def is_effective_admin_by_id(redis_client, user_id: str) -> bool:
+    """Convenience: fetch the user then delegate to ``is_effective_admin``."""
+    return is_effective_admin(get_user_by_id(redis_client, user_id))
+
+
 def get_user_by_email(redis_client, email: str) -> Optional[Dict[str, Any]]:
     user_id = redis_client.get(_email_index_key(email))
     if not user_id:

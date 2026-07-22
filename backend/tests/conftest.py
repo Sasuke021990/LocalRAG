@@ -37,6 +37,40 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
 
+def _assert_safe_to_flush(client) -> None:
+    """
+    Hard safety guard, called immediately before any destructive test
+    operation (flushdb, dropindex with delete_documents=True) on the
+    connected Redis. Refuses (raises) if it finds any account that doesn't
+    look like test fixture data.
+
+    Why this exists: on 2026-07-22, running this suite via `docker exec
+    <backend-container> pytest` silently flushed the *production* Redis
+    thousands of times over a session, because that container's own
+    REDIS_HOST/REDIS_PORT env vars (used to reach the real, shared instance)
+    override anything this file might default to -- so changing a Python
+    default here cannot prevent recurrence on its own. This check does not
+    trust the environment at all; it inspects the data itself. Every test
+    fixture in this suite creates accounts with an ``@example.com`` address
+    by convention (grep the fixtures) -- a real deployment's accounts never
+    will, so their presence is treated as proof this is not an isolated
+    test database.
+    """
+    for key in client.scan_iter(match="user_email_index:*", count=1000):
+        email = key.split(":", 1)[1] if ":" in key else key
+        if not email.lower().endswith("@example.com"):
+            raise RuntimeError(
+                "\n\n" + "=" * 76 + "\n"
+                f"REFUSING a destructive test operation against {REDIS_HOST}:{REDIS_PORT} (db 0).\n"
+                f"Found what looks like a real account: {key!r}\n\n"
+                "This does not look like an isolated test database -- every fixture in\n"
+                "this suite uses @example.com addresses. Point the test suite at a\n"
+                "dedicated, disposable Redis instance (never one backing a running\n"
+                "deployment) via REDIS_HOST/REDIS_PORT.\n"
+                + "=" * 76 + "\n"
+            )
+
+
 class FakeSentenceTransformer:
     """
     Deterministic stand-in for ``sentence_transformers.SentenceTransformer``.
@@ -81,20 +115,41 @@ def patched_embedding_models(monkeypatch):
 
 @pytest.fixture
 def redis_client():
-    """Real Redis connection, flushed before and after each test. Skips if unreachable."""
+    """
+    Real Redis connection, flushed before and after each test. Skips if
+    unreachable. See _assert_safe_to_flush's docstring -- this refuses to
+    run against anything that looks like it might be a real deployment's
+    database, regardless of what REDIS_HOST/REDIS_PORT happen to resolve to.
+    """
     client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
     try:
         client.ping()
     except Exception as exc:
         pytest.skip(f"No Redis reachable at {REDIS_HOST}:{REDIS_PORT} ({exc})")
+    _assert_safe_to_flush(client)
     client.flushdb()
     yield client
+    _assert_safe_to_flush(client)
     client.flushdb()
 
 
 @pytest.fixture(scope="session")
 def redisearch_vector_available():
-    """True if the connected Redis has a RediSearch build with VECTOR field support."""
+    """
+    True if the connected Redis has a RediSearch build with VECTOR field
+    support.
+
+    SAFETY: this used to call vector_index.ensure_index(), which hardcodes
+    the app's real index name (idx:chunks), then unconditionally dropped
+    that same real index with delete_documents=True in a finally block --
+    i.e. it destroyed real chunk data by construction whenever run against
+    a live Redis, independent of any env-var mixup. Fixed by creating and
+    dropping its own uniquely-named, uniquely-prefixed probe index instead,
+    so this check never touches idx:chunks or any chunk:* data at all.
+    """
+    from redis.commands.search.field import VectorField
+    from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+
     client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
     try:
         client.ping()
@@ -102,18 +157,18 @@ def redisearch_vector_available():
         return False
 
     probe_index = "idx:__pytest_vector_probe__"
+    probe_prefix = "__pytest_vector_probe__:"
     try:
-        vector_index_module.ensure_index(client, dim=4)
+        client.ft(probe_index).create_index(
+            fields=(VectorField("embedding", "HNSW", {"TYPE": "FLOAT32", "DIM": 4, "DISTANCE_METRIC": "COSINE"}),),
+            definition=IndexDefinition(prefix=[probe_prefix], index_type=IndexType.HASH),
+        )
         return True
     except Exception:
         return False
     finally:
         try:
-            client.ft(vector_index_module.INDEX_NAME).dropindex(delete_documents=True)
-        except Exception:
-            pass
-        try:
-            client.ft(probe_index).dropindex(delete_documents=True)
+            client.ft(probe_index).dropindex(delete_documents=True)  # only ever touches probe_prefix:* keys
         except Exception:
             pass
 

@@ -58,6 +58,48 @@ class TestGetConversation:
         _signup(chat_client)
         assert chat_client.get("/chat/conversations/no-such-id").status_code == 404
 
+    def test_slimmed_sources_rehydrated_from_chunk_data(self, chat_client, redis_client):
+        # Simulates main.py's _slim_sources: only file_name/pool/chunk_index/
+        # score are persisted, no `content`. GET must re-attach it by reading
+        # the still-durable chunk:* HASH (written by ingestion, unrelated to
+        # chat storage) — proving the ~70%-smaller storage doesn't lose data.
+        from retrieval import vector_index
+
+        user = _signup(chat_client)
+        uid = user["user_id"]
+        vector_index.index_chunk(redis_client, uid, "General", "doc.txt", 0, "the real passage text", [0.0] * 4)
+
+        conv = chat_store.create_conversation(redis_client, uid, title="t")
+        chat_store.append_message(
+            redis_client, uid, conv["id"], "assistant", "an answer",
+            sources=[{"file_name": "doc.txt", "pool": "General", "chunk_index": 0, "score": 0.9}],
+        )
+
+        body = chat_client.get(f"/chat/conversations/{conv['id']}").json()
+        assert body["messages"][0]["sources"][0]["content"] == "the real passage text"
+
+    def test_hydration_falls_back_to_empty_when_chunk_gone(self, chat_client, redis_client):
+        user = _signup(chat_client)
+        conv = chat_store.create_conversation(redis_client, user["user_id"], title="t")
+        chat_store.append_message(
+            redis_client, user["user_id"], conv["id"], "assistant", "an answer",
+            sources=[{"file_name": "deleted.txt", "pool": "General", "chunk_index": 0, "score": 0.5}],
+        )
+        body = chat_client.get(f"/chat/conversations/{conv['id']}").json()
+        assert body["messages"][0]["sources"][0]["content"] == ""
+
+    def test_already_hydrated_sources_left_alone(self, chat_client, redis_client):
+        # Legacy data saved before the trimming change (full content already
+        # present) — hydration must not overwrite or double-fetch it.
+        user = _signup(chat_client)
+        conv = chat_store.create_conversation(redis_client, user["user_id"], title="t")
+        chat_store.append_message(
+            redis_client, user["user_id"], conv["id"], "assistant", "an answer",
+            sources=[{"file_name": "doc.txt", "pool": "General", "chunk_index": 0, "score": 0.5, "content": "already here"}],
+        )
+        body = chat_client.get(f"/chat/conversations/{conv['id']}").json()
+        assert body["messages"][0]["sources"][0]["content"] == "already here"
+
     def test_cannot_get_another_users_conversation(self, chat_client, redis_client):
         _signup(chat_client, "owner@example.com")
         owner_id = chat_client.get("/auth/me").json()["user_id"]

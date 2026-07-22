@@ -156,6 +156,12 @@ class Config:
     MAX_PRICE_ANNUAL_INR: int = int(os.getenv('MAX_PRICE_ANNUAL_INR', 800))
     # Max team members that can share a Max-plan workspace.
     MAX_PLAN_TEAM_MEMBERS: int = int(os.getenv('MAX_PLAN_TEAM_MEMBERS', 5))
+    # Saved-conversation caps per plan. Starting a new chat past the cap
+    # auto-deletes the least-recently-touched conversation to make room
+    # (no blocking/upgrade nag). <= 0 means unlimited.
+    FREE_CONVERSATION_LIMIT: int = int(os.getenv('FREE_CONVERSATION_LIMIT', 5))
+    PRO_CONVERSATION_LIMIT: int = int(os.getenv('PRO_CONVERSATION_LIMIT', 15))
+    MAX_CONVERSATION_LIMIT: int = int(os.getenv('MAX_CONVERSATION_LIMIT', 20))
 
     @classmethod
     def validate(cls):

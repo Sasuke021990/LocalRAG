@@ -144,3 +144,44 @@ class TestRenameAndDelete:
         conv = chat_store.create_conversation(redis_client, second_test_user)
         assert chat_store.delete_conversation(redis_client, test_user, conv["id"]) is False
         assert chat_store.get_conversation(redis_client, second_test_user, conv["id"]) is not None
+
+
+class TestEnforceConversationLimit:
+    def test_noop_when_under_limit(self, redis_client, test_user):
+        for i in range(3):
+            chat_store.create_conversation(redis_client, test_user, title=f"c{i}")
+        chat_store.enforce_conversation_limit(redis_client, test_user, limit=5)
+        assert len(chat_store.list_conversations(redis_client, test_user)) == 3
+
+    def test_evicts_oldest_when_at_limit(self, redis_client, test_user):
+        ids = [chat_store.create_conversation(redis_client, test_user, title=f"c{i}")["id"] for i in range(3)]
+        chat_store.enforce_conversation_limit(redis_client, test_user, limit=3)
+        remaining = {c["id"] for c in chat_store.list_conversations(redis_client, test_user)}
+        assert ids[0] not in remaining  # oldest (first created, never touched again) evicted
+        assert ids[1] in remaining
+        assert ids[2] in remaining
+        assert len(remaining) == 2
+
+    def test_recently_touched_conversation_survives(self, redis_client, test_user):
+        first = chat_store.create_conversation(redis_client, test_user, title="first")
+        second = chat_store.create_conversation(redis_client, test_user, title="second")
+        # Touch "first" so it's now the most-recently-updated, not "second".
+        chat_store.append_message(redis_client, test_user, first["id"], "user", "revive me")
+        chat_store.enforce_conversation_limit(redis_client, test_user, limit=2)
+        remaining = {c["id"] for c in chat_store.list_conversations(redis_client, test_user)}
+        assert first["id"] in remaining
+        assert second["id"] not in remaining
+
+    def test_unlimited_when_limit_zero_or_negative(self, redis_client, test_user):
+        for i in range(5):
+            chat_store.create_conversation(redis_client, test_user, title=f"c{i}")
+        chat_store.enforce_conversation_limit(redis_client, test_user, limit=0)
+        chat_store.enforce_conversation_limit(redis_client, test_user, limit=-1)
+        assert len(chat_store.list_conversations(redis_client, test_user)) == 5
+
+    def test_scoped_per_user(self, redis_client, test_user, second_test_user):
+        for i in range(3):
+            chat_store.create_conversation(redis_client, test_user, title=f"mine{i}")
+        chat_store.create_conversation(redis_client, second_test_user, title="theirs")
+        chat_store.enforce_conversation_limit(redis_client, test_user, limit=3)
+        assert len(chat_store.list_conversations(redis_client, second_test_user)) == 1
