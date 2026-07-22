@@ -20,7 +20,7 @@ class _Result:
 
 class FakeSearch:
     def __init__(self, results): self._results = results
-    def search(self, user_id, query, top_k): return self._results
+    def search(self, user_id, query, top_k, pool=None): return self._results
 
 
 class FakeReranker:

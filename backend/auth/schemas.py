@@ -9,10 +9,22 @@ def _validate_password_length(v: str) -> str:
     return v
 
 
+def _validate_username(v: str) -> str:
+    # Optional at the API level (falls back to the email's local part server-
+    # side, same as auth.store.create_user) — the signup *form* requires it,
+    # but the API itself stays backward-compatible for other callers.
+    v = (v or "").strip()
+    if len(v) > 60:
+        raise ValueError("username must be 60 characters or fewer")
+    return v
+
+
 class SignupRequest(BaseModel):
+    username: str = ""
     email: EmailStr
     password: str
 
+    _check_username = field_validator("username")(_validate_username)
     _check_password = field_validator("password")(_validate_password_length)
 
 
@@ -45,6 +57,7 @@ class ChangePasswordSchema(BaseModel):
 
 class UserOut(BaseModel):
     user_id: str
+    username: str = ""
     email: str
     storage_used_bytes: int
     storage_quota_bytes: int

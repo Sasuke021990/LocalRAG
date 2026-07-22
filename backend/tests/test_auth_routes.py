@@ -28,6 +28,22 @@ class TestSignupLoginMe:
         resp = auth_client.post("/auth/signup", json={"email": "carol@example.com", "password": "otherpassword"})
         assert resp.status_code == 409
 
+    def test_signup_captures_username(self, auth_client):
+        resp = auth_client.post(
+            "/auth/signup",
+            json={"username": "Alice W", "email": "aliceusername@example.com", "password": "longenough123"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "Alice W"
+        assert auth_client.get("/auth/me").json()["username"] == "Alice W"
+
+    def test_signup_without_username_falls_back_to_email_local_part(self, auth_client):
+        resp = auth_client.post(
+            "/auth/signup", json={"email": "nouser@example.com", "password": "longenough123"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "nouser"
+
     def test_login_wrong_password_401(self, auth_client):
         auth_client.post("/auth/signup", json={"email": "dave@example.com", "password": "longenough123"})
         resp = auth_client.post("/auth/login", json={"email": "dave@example.com", "password": "wrongpassword"})

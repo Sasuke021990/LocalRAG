@@ -48,7 +48,9 @@ async function logout() {
 
         <div class="flex items-center gap-3">
           <PlanBadge class="hidden sm:inline-flex" />
-          <span class="text-sm text-ink-soft hidden lg:inline max-w-[12rem] truncate">{{ auth.user?.email }}</span>
+          <span class="text-sm text-ink-soft hidden lg:inline max-w-[12rem] truncate" :title="auth.user?.email">
+            {{ auth.user?.username || auth.user?.email }}
+          </span>
           <button class="hidden md:inline-flex text-ink-muted hover:text-rose transition-colors cursor-pointer" title="Log out" @click="logout">
             <LogOut class="w-5 h-5" />
           </button>

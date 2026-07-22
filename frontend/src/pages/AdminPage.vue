@@ -160,7 +160,10 @@ async function confirmDelete() {
             <tr v-for="u in users" :key="u.user_id" class="border-b border-border-subtle last:border-0 hover:bg-surface-alt">
               <td class="px-6 py-3">
                 <div class="flex items-center gap-2">
-                  <span class="font-medium text-ink truncate max-w-[16rem]">{{ u.email }}</span>
+                  <span class="font-medium text-ink truncate max-w-[16rem]" :title="u.email">
+                    {{ u.username || u.email }}
+                  </span>
+                  <span v-if="u.username" class="text-xs text-ink-muted truncate max-w-[12rem]">{{ u.email }}</span>
                   <Badge v-if="u.is_admin" color="pink">admin</Badge>
                   <Badge v-if="isSelf(u)" color="slate">you</Badge>
                 </div>

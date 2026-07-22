@@ -73,7 +73,7 @@ function onFilePicked(e) {
 const recent = computed(() =>
   [...documents.value].sort((a, b) => (b.processed_at || '').localeCompare(a.processed_at || '')).slice(0, 5)
 )
-const firstName = computed(() => (auth.user?.email || '').split('@')[0])
+const firstName = computed(() => auth.user?.username || (auth.user?.email || '').split('@')[0])
 </script>
 
 <template>
