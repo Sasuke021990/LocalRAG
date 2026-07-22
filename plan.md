@@ -63,7 +63,7 @@ possible.
 
 ## B. Chat experience — P1
 
-- [ ] **Pool-selection popup** — clicking "open chat" / "ask a question" shows a modal listing available pools; user must pick one to continue. **Replaces** the inline pool dropdown currently in the Chat page header (confirmed 2026-07-22) — remove that dropdown once the popup lands; consider a small "change pool" affordance if users need to switch mid-conversation.
+- [x] **Pool-selection popup** — opens automatically every time the Chat page is entered (Dashboard's "Open chat" / "Ask a question", nav link), listing pools + "All pools"; dismissing without a pick defaults to "All pools" rather than trapping the user. **Replaced** the inline dropdown with a small pill in the header that reopens the same popup to switch pools mid-conversation.
 - [ ] **Conversational memory** — every question is currently answered with zero memory of prior turns in the same chat; a follow-up like "what about the express option?" has no context. Needs prior turns threaded into the grounding prompt.
 - [ ] **Server-side chat history/persistence** — conversations currently live only in browser memory; a refresh loses everything. Need saved conversations, resume, rename, delete.
 - [ ] Citation click-to-preview — click `[1]` to see the exact source passage/doc
