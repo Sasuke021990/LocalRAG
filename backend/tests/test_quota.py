@@ -90,3 +90,10 @@ class TestAiQuestionQuota:
         assert quota.ai_questions_limit(redis_client, user) == 25
         billing_store.set_plan(redis_client, user, "max")
         assert quota.ai_questions_limit(redis_client, user) == 30
+
+    def test_admin_is_exempt_from_limit(self, redis_client, user):
+        from auth import store as auth_store
+        auth_store.set_admin(redis_client, user, True)
+        for _ in range(50):  # far past any plan limit
+            quota.record_ai_question(redis_client, user)
+        quota.check_ai_question_allowed(redis_client, user)  # admin → no raise
