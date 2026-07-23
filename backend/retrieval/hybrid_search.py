@@ -26,6 +26,7 @@ except ImportError:
 from sentence_transformers import SentenceTransformer
 
 from retrieval import vector_index
+from utils.config import config
 from utils.device import get_best_device
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ class HybridSearchEngine:
                     host=redis_host,
                     port=redis_port,
                     db=redis_db,
+                    password=config.REDIS_PASSWORD or None,
                     decode_responses=True
                 )
                 # Test connection

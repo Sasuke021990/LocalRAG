@@ -97,6 +97,23 @@ class Config:
         for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
         if origin.strip()
     ]
+    # When True, the rate limiter derives the client IP from the left-most
+    # X-Forwarded-For entry instead of the socket peer. Only enable this when
+    # the API sits behind a trusted reverse proxy that sets XFF — otherwise a
+    # client can spoof the header to dodge (or frame others for) rate limits.
+    TRUST_PROXY_HEADERS: bool = os.getenv('TRUST_PROXY_HEADERS', 'False').lower() == 'true'
+
+    # === Rate limiting (auth endpoints) ===
+    # Redis-backed fixed-window limiter shared across all backend workers.
+    # Off switch is for the test suite; leave it on in every real environment.
+    RATE_LIMIT_ENABLED: bool = os.getenv('RATE_LIMIT_ENABLED', 'True').lower() == 'true'
+    # Per-IP allowances: <max> requests per <window> seconds.
+    RATE_LIMIT_LOGIN_MAX: int = int(os.getenv('RATE_LIMIT_LOGIN_MAX', 10))
+    RATE_LIMIT_LOGIN_WINDOW: int = int(os.getenv('RATE_LIMIT_LOGIN_WINDOW', 60))
+    RATE_LIMIT_SIGNUP_MAX: int = int(os.getenv('RATE_LIMIT_SIGNUP_MAX', 5))
+    RATE_LIMIT_SIGNUP_WINDOW: int = int(os.getenv('RATE_LIMIT_SIGNUP_WINDOW', 3600))
+    RATE_LIMIT_RESET_MAX: int = int(os.getenv('RATE_LIMIT_RESET_MAX', 5))
+    RATE_LIMIT_RESET_WINDOW: int = int(os.getenv('RATE_LIMIT_RESET_WINDOW', 3600))
 
     # === Auth / Session Configuration (Vaultly multi-user) ===
     # No default — a missing secret at import time is a startup-time bug,

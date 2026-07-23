@@ -20,6 +20,7 @@ from auth.schemas import (
 )
 from utils import system_settings
 from utils.config import config
+from utils.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def _user_out(user: dict, token: str) -> AuthResponse:
     )
 
 
-@router.post("/signup", response_model=AuthResponse)
+@router.post("/signup", response_model=AuthResponse, dependencies=[Depends(rate_limit("signup"))])
 async def signup(body: SignupRequest, response: Response):
     if not system_settings.signups_enabled(redis_client):
         raise HTTPException(status_code=403, detail="Public signups are currently disabled")
@@ -75,7 +76,7 @@ async def signup(body: SignupRequest, response: Response):
     return _user_out(user, token)
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post("/login", response_model=AuthResponse, dependencies=[Depends(rate_limit("login"))])
 async def login(body: LoginRequest, response: Response):
     """``body.email`` accepts either an email address or a username."""
     user = store.get_user_by_identifier(redis_client, body.email)
@@ -194,7 +195,7 @@ async def google_token_exchange(body: GoogleTokenExchangeSchema):
 
 # ─── Password reset ─────────────────────────────────────────────────────────
 
-@router.post("/password-reset/request")
+@router.post("/password-reset/request", dependencies=[Depends(rate_limit("password_reset"))])
 async def password_reset_request(body: PasswordResetRequestSchema, background_tasks: BackgroundTasks):
     """
     Always returns 200 regardless of whether the email is registered --

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from utils.config import config
 from utils.device import get_best_device
 
 # For Redis connection and operations
@@ -75,6 +76,7 @@ class SemanticCache:
                     host=redis_host,
                     port=redis_port,
                     db=redis_db,
+                    password=config.REDIS_PASSWORD or None,
                     decode_responses=True
                 )
                 # Test connection

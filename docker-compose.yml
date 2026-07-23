@@ -1,18 +1,22 @@
 version: '3.8'
 
 services:
-  # Redis Stack for vector storage and caching
+  # Redis Stack for vector storage and caching.
+  # SECURITY: reachable only over the internal compose network + loopback, and
+  # requires a password. Never publish 6379 (or the RedisInsight UI on 8001) on
+  # a public interface — Redis holds every tenant's password hashes, tokens,
+  # and PII. See SECURITY.md (finding H1).
   redis:
     image: redis/redis-stack:7.2.0-v10
     container_name: local-rag-redis
     ports:
-      - "6379:6379"
-      - "8001:8001"  # RedisInsight web UI
+      # Loopback-only host bind for local debugging (redis-cli from the host).
+      # Drop this line entirely in production — the backend reaches Redis over
+      # the compose network as `redis:6379` and needs no host mapping.
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-stack-server --appendonly yes
-    environment:
-      - REDIS_ARGS=--appendonly yes
+    command: redis-stack-server --appendonly yes --requirepass "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (e.g. openssl rand -hex 32)}"
     restart: unless-stopped
 
   # Backend API service
@@ -29,10 +33,14 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (e.g. openssl rand -hex 32)}
       - LD_LIBRARY_PATH=/usr/lib/wsl/lib
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (e.g. openssl rand -hex 32)}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:3000}
+      # Set TRUST_PROXY_HEADERS=true only when a trusted reverse proxy sets
+      # X-Forwarded-For (needed for correct per-IP rate limiting behind a proxy).
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-False}
       - SESSION_IDLE_TIMEOUT_SECONDS=${SESSION_IDLE_TIMEOUT_SECONDS:-60}
       # Billing / plan limits (INR) — Free/Pro/Max storage, AI-question quota,
       # saved-conversation cap, pricing, team size. See .env.example.

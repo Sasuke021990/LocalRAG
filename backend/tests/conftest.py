@@ -102,6 +102,18 @@ class FakeSentenceTransformer:
 
 
 @pytest.fixture(autouse=True)
+def disable_rate_limiting(monkeypatch):
+    """
+    Turn the auth rate limiter off for the general suite — many tests make
+    repeated signup/login calls from the same TestClient IP and would
+    otherwise trip the 429. ``test_rate_limit.py`` re-enables it explicitly to
+    exercise the limiter itself.
+    """
+    from utils.config import config
+    monkeypatch.setattr(config, "RATE_LIMIT_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def patched_embedding_models(monkeypatch):
     """Replace SentenceTransformer with the deterministic fake everywhere it's imported."""
     import ingestion.pipeline as pipeline_module
