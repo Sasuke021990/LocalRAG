@@ -41,6 +41,18 @@ services:
       # Set TRUST_PROXY_HEADERS=true only when a trusted reverse proxy sets
       # X-Forwarded-For (needed for correct per-IP rate limiting behind a proxy).
       - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-False}
+      # /docs + /redoc publish the full API surface unauthenticated -- leave
+      # on for local/homelab use, set to false for an internet-facing deploy
+      # that doesn't need public API docs.
+      - API_DOCS_ENABLED=${API_DOCS_ENABLED:-True}
+      # Auth rate limiting (Redis-backed, per client IP). See .env.example.
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-True}
+      - RATE_LIMIT_LOGIN_MAX=${RATE_LIMIT_LOGIN_MAX:-10}
+      - RATE_LIMIT_LOGIN_WINDOW=${RATE_LIMIT_LOGIN_WINDOW:-60}
+      - RATE_LIMIT_SIGNUP_MAX=${RATE_LIMIT_SIGNUP_MAX:-5}
+      - RATE_LIMIT_SIGNUP_WINDOW=${RATE_LIMIT_SIGNUP_WINDOW:-3600}
+      - RATE_LIMIT_RESET_MAX=${RATE_LIMIT_RESET_MAX:-5}
+      - RATE_LIMIT_RESET_WINDOW=${RATE_LIMIT_RESET_WINDOW:-3600}
       - SESSION_IDLE_TIMEOUT_SECONDS=${SESSION_IDLE_TIMEOUT_SECONDS:-60}
       # Billing / plan limits (INR) — Free/Pro/Max storage, AI-question quota,
       # saved-conversation cap, pricing, team size. See .env.example.

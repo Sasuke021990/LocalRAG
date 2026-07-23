@@ -10,7 +10,7 @@ user:<user_id>                    HASH   email, password_hash, google_sub,
 user_email_index:<email lower>    STRING -> user_id
 user_username_index:<username lower> STRING -> user_id
 user_google_index:<google sub>    STRING -> user_id
-password_reset:<token>            STRING -> user_id  (TTL 1 hour)
+password_reset:<token>            STRING -> user_id  (TTL 15 min)
 """
 
 import logging
@@ -23,7 +23,9 @@ from utils.config import config
 
 logger = logging.getLogger(__name__)
 
-PASSWORD_RESET_TTL_SECONDS = 3600
+# Kept short (15 min) so a captured reset link has a narrow window of use —
+# see SECURITY.md finding L2 (was 1 hour).
+PASSWORD_RESET_TTL_SECONDS = 900
 
 
 def _user_key(user_id: str) -> str:

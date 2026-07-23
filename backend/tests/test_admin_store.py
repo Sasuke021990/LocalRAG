@@ -3,6 +3,7 @@
 from admin import store as admin_store
 from auth import passwords
 from auth import store as auth_store
+from chat import store as chat_store
 from integrations import mcp_tokens, webhooks
 
 
@@ -81,6 +82,7 @@ class TestCascadeDelete:
         redis_client.set(f"semantic_cache:{uid}:abc", '{"results":[]}')
         token, _ = mcp_tokens.create_token(redis_client, uid, "t")
         webhooks.create_webhook(redis_client, uid, "https://x.com/h", ["document.ingested"])
+        chat_store.append_message(redis_client, uid, chat_store.create_conversation(redis_client, uid)["id"], "user", "hi")
         (tmp_path / uid / "General").mkdir(parents=True)
         (tmp_path / uid / "General" / "x.json").write_text("{}")
 
@@ -89,16 +91,36 @@ class TestCascadeDelete:
         # User + indices gone.
         assert auth_store.get_user_by_id(redis_client, uid) is None
         assert auth_store.get_user_by_email(redis_client, "a@example.com") is None
+        assert auth_store.get_user_by_username(redis_client, "a") is None
         # Every owned key gone.
         assert redis_client.keys(f"document:{uid}:*") == []
         assert redis_client.keys(f"chunk:{uid}:*") == []
         assert redis_client.keys(f"semantic_cache:{uid}:*") == []
         assert redis_client.keys(f"webhook:{uid}:*") == []
+        assert redis_client.keys(f"conversation:{uid}:*") == []
+        assert redis_client.exists(f"conversation_index:{uid}") == 0
         assert redis_client.scard(f"mcp_tokens:{uid}") == 0
         # Token no longer resolves.
         assert mcp_tokens.resolve_token(redis_client, token) is None
         # Disk tree gone.
         assert not (tmp_path / uid).exists()
+
+    def test_delete_then_resignup_with_same_email_succeeds(self, redis_client, tmp_path):
+        """
+        Regression test: delete_user_completely used to leave the derived
+        username index (user_username_index:<local-part-of-email>) behind,
+        so a re-signup with the same email (which re-derives the same
+        username when none is given) would incorrectly 409 as "username
+        already taken" even though the account was fully deleted.
+        """
+        uid = _make_user(redis_client, "reused@example.com")
+        assert admin_store.delete_user_completely(redis_client, uid, data_dir=str(tmp_path)) is True
+
+        new_uid = auth_store.create_user(
+            redis_client, "reused@example.com", password_hash=passwords.hash_password("longenough123"),
+        )
+        assert new_uid != uid
+        assert auth_store.get_user_by_email(redis_client, "reused@example.com")["user_id"] == new_uid
 
     def test_delete_missing_user_returns_false(self, redis_client):
         assert admin_store.delete_user_completely(redis_client, "nope", data_dir="/tmp") is False

@@ -103,6 +103,11 @@ class Config:
     # client can spoof the header to dodge (or frame others for) rate limits.
     TRUST_PROXY_HEADERS: bool = os.getenv('TRUST_PROXY_HEADERS', 'False').lower() == 'true'
 
+    # When False, /docs and /redoc (the full API surface, unauthenticated) are
+    # not mounted at all. Defaults on for local/homelab use; set to false in
+    # any internet-facing deployment that doesn't need public API docs.
+    API_DOCS_ENABLED: bool = os.getenv('API_DOCS_ENABLED', 'True').lower() == 'true'
+
     # === Rate limiting (auth endpoints) ===
     # Redis-backed fixed-window limiter shared across all backend workers.
     # Off switch is for the test suite; leave it on in every real environment.

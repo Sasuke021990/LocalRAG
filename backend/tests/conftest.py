@@ -35,6 +35,13 @@ from retrieval import vector_index as vector_index_module  # noqa: E402
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+# Matches auth.redis_client / ingestion.pipeline / retrieval.*'s own client
+# construction -- once Redis runs with --requirepass (see SECURITY.md H1),
+# these fixtures need the same credential or every DB-touching test silently
+# skips via the `except Exception: pytest.skip(...)` below (NOAUTH looks
+# identical to "no Redis reachable" from here). Empty/unset is fine for a
+# plain local Redis with no password.
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or None
 
 
 def _assert_safe_to_flush(client) -> None:
@@ -133,7 +140,7 @@ def redis_client():
     run against anything that looks like it might be a real deployment's
     database, regardless of what REDIS_HOST/REDIS_PORT happen to resolve to.
     """
-    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, password=REDIS_PASSWORD, decode_responses=True)
     try:
         client.ping()
     except Exception as exc:
@@ -162,7 +169,7 @@ def redisearch_vector_available():
     from redis.commands.search.field import VectorField
     from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 
-    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, password=REDIS_PASSWORD, decode_responses=True)
     try:
         client.ping()
     except Exception:

@@ -22,13 +22,13 @@ The codebase is, on the whole, **well-architected for security**: bcrypt passwor
 | M4 | Internal exception text leaked to clients (`detail=str(exc)`) | Medium | backend | Open |
 | M5 | No HTTP security headers (HSTS, CSP, X-Frame-Options, nosniff) | Medium | backend | Open |
 | M6 | OAuth `state` generated but not verified on callback (login CSRF) | Medium | backend | Open |
-| L1 | Swagger `/docs` + `/redoc` publicly exposed | Low | backend | Open |
-| L2 | Password-reset token TTL is 1 hour (guide recommends ≤15 min) | Low | backend | Open |
-| L3 | Logout does not invalidate the JWT server-side | Low | backend | Open |
-| L4 | No self-service account deletion / data export | Low | product | Open |
-| L5 | Generated default-admin password written to logs | Low | backend | Open |
-| L6 | Google token-exchange failure logs full response body | Low | backend | Open |
-| L7 | `mcp/node_modules/` (~3,700 files) committed to git | Low | hygiene | Open |
+| L1 | Swagger `/docs` + `/redoc` publicly exposed | Low | backend | ✅ **Fixed** |
+| L2 | Password-reset token TTL is 1 hour (guide recommends ≤15 min) | Low | backend | ✅ **Fixed** |
+| L3 | Logout does not invalidate the JWT server-side | Low | backend | ✅ **Fixed** |
+| L4 | No self-service account deletion / data export | Low | product | ✅ **Fixed** (deletion; export still open) |
+| L5 | Generated default-admin password written to logs | Low | backend | ✅ **Fixed** |
+| L6 | Google token-exchange failure logs full response body | Low | backend | ✅ **Fixed** |
+| L7 | `mcp/node_modules/` (~3,700 files) committed to git | Low | hygiene | ✅ **Fixed** |
 
 ---
 
@@ -59,11 +59,7 @@ These held up under review and should be preserved:
 - `.env` is not tracked and has no git history; `.env.example` holds placeholders only.
 - Frontend uses a relative `/api` base and no `VITE_`/`import.meta.env` secret exposure; mobile ships only the public `apiBaseUrl`.
 
-**L7 — `mcp/node_modules/` committed to git.** ~3,700 files under `mcp/node_modules/` are tracked even though `node_modules/` is in `.gitignore` (they predate the ignore rule; ignore doesn't apply to already-tracked files). This bloats the repo and pulls third-party code into your own history/supply-chain surface.
-Fix:
-```bash
-git rm -r --cached mcp/node_modules && git commit -m "chore: stop tracking mcp/node_modules"
-```
+**L7 — `mcp/node_modules/` committed to git (fixed).** ~3,700 files under `mcp/node_modules/` were tracked even though `node_modules/` is in `.gitignore` (they predated the ignore rule; ignore doesn't apply to already-tracked files). Untracked via `git rm -r --cached mcp/node_modules` — the files stay on disk (still needed to run `mcp`), just no longer versioned.
 
 ---
 
@@ -73,11 +69,11 @@ git rm -r --cached mcp/node_modules && git commit -m "chore: stop tracking mcp/n
 
 - **PII collected:** email, username, password (→ bcrypt hash), Google `sub`, plus uploaded document content and derived embeddings. Payment data is **not** handled in-app (billing is a stub — no card data touches the system).
 - **Passwords** are hashed before storage and never logged or returned. API responses use explicit Pydantic schemas (`UserOut`, `AuthResponse`) that never include `password_hash`; the admin user cast (`backend/admin/store.py:_cast_user`) also omits it.
-- **Logs** don't print user passwords or tokens (token *IDs* only, which are non-secret). See L5/L6 for two exceptions.
+- **Logs** don't print user passwords or tokens (token *IDs* only, which are non-secret). **L5/L6 fixed** — see Check 3/4.
 - **Webhook payloads are metadata-only** (file name, pool, event) — document contents never leave the system through webhooks, by design.
 - **Cookies:** session cookie is `httpOnly` + `sameSite=lax` (good) but **missing `Secure`** → see M1. No PII in browser `localStorage`.
 
-**L4 — No self-service data deletion/export.** Users can't delete their own account or export their data; only an admin can delete a user (`DELETE /admin/users/{id}`). For a SaaS handling EU/India users, add a self-service "delete my account & data" flow (and ideally export) to meet GDPR/DPDP expectations.
+**L4 — Self-service account deletion (fixed).** `DELETE /auth/me` (session-only, password-reconfirmed) now lets a user permanently delete their own account and everything they own — reusing the same hard-delete `admin.store.delete_user_completely` an admin uses. While building this, found and fixed a real pre-existing gap in that shared delete path: it never freed the `user_username_index` or `conversation:*`/`conversation_index:*` keys, so a deleted user's username stayed "taken" forever (blocking re-signup with the same email, since the username auto-derives from it) and their chat history silently survived deletion — both now cleaned up, benefiting the admin-delete path too. Self-service **export** is still not implemented — worth adding for GDPR/DPDP completeness, but out of scope for this pass.
 
 ---
 
@@ -86,12 +82,14 @@ git rm -r --cached mcp/node_modules && git commit -m "chore: stop tracking mcp/n
 **Result: several hardening gaps.**
 
 - ✅ **Env vars** validated; app refuses to start without `JWT_SECRET`. `DEBUG` defaults off.
-- ✅ **No debug/backdoor endpoints** (`/test`, `/seed-data`, etc.). Only `/`, `/health`, `/docs`, `/redoc`.
+- ✅ **No debug/backdoor endpoints** (`/test`, `/seed-data`, etc.).
 - ✅ **CORS** is env-restricted, not wildcard (`allow_origins=CORS_ALLOWED_ORIGINS_LIST`, `backend/main.py:82`).
 - ✅ **H2 — Rate limiting added (fixed).** `/auth/login`, `/auth/signup`, and `/auth/password-reset/request` are now throttled per client IP by a Redis-backed limiter (`backend/utils/rate_limit.py`, defaults 10/min · 5/hr · 5/hr, env-configurable). Shared across workers, fails open on Redis error.
 - ❌ **M4 — Error leakage.** Multiple handlers do `raise HTTPException(status_code=500, detail=str(exc))` (`backend/main.py:244,259,283,331,494,601`). Raw exception text (Redis errors, file paths, internals) is returned to the client. Return a generic message + a correlation ID; log the detail server-side only.
 - ❌ **M5 — No security headers.** No HSTS, `X-Frame-Options`, `X-Content-Type-Options: nosniff`, or CSP on responses. Add a middleware (or set them at the frontend/reverse-proxy tier).
 - ✅ **H1 — Database exposure closed (fixed).** Both compose files now require `REDIS_PASSWORD` (`--requirepass`), no longer publish Redis/RedisInsight on a public interface, and the backend authenticates with the password. TLS remains a follow-up only if Redis moves to a separate host.
+- ✅ **L1 — Swagger gated (fixed).** `/docs`, `/redoc`, and `/openapi.json` are now conditional on `API_DOCS_ENABLED` (`backend/main.py`, default on for homelab use — set to `false` for an internet-facing deploy that doesn't need public API docs).
+- ✅ **L5 — No more logged admin passwords (fixed).** The startup admin-seed no longer auto-generates a password and prints it to logs; it requires `ADMIN_PASSWORD` explicitly (skips seeding with a warning if unset) — see `backend/main.py:_seed_default_admin`.
 
 ---
 
@@ -102,9 +100,10 @@ git rm -r --cached mcp/node_modules && git commit -m "chore: stop tracking mcp/n
 **Authentication & authorization**
 - ✅ Every protected route depends on `require_current_user`/`require_session_user`/`require_admin_user`.
 - ✅ **No IDOR** — no endpoint trusts a client-supplied user ID; ownership is implicit in the user-scoped keyspace, and cross-user `task_id`/conversation access returns 404/error.
-- ✅ **Password-reset tokens** are random (`uuid4`), single-use (deleted on consume), and TTL'd (`backend/auth/store.py:178`). **L2:** TTL is 1 hour — tighten to ≤15 min.
-- ✅ **JWT** — strong secret required, expiry enforced, `token_version` revocation. **L3:** logout only deletes the cookie; a captured bearer token stays valid until `exp` (stateless-JWT tradeoff — acceptable, but document it, and consider a short-lived-token + refresh model or a logout revocation list for SaaS).
+- ✅ **Password-reset tokens** are random (`uuid4`), single-use (deleted on consume). **L2 fixed** — TTL tightened from 1 hour to 15 minutes (`backend/auth/store.py:PASSWORD_RESET_TTL_SECONDS`).
+- ✅ **JWT** — strong secret required, expiry enforced, `token_version` revocation. **L3 fixed** — logout now revokes the specific presented token via a `jti` claim + Redis blacklist (`backend/auth/session_blacklist.py`), rather than only clearing the cookie; other devices/sessions are untouched (that's what `token_version` bumps are for). Verified live: the exact bearer token issued at login returns `401 "Session revoked"` immediately after logout.
 - ⚠️ **M6 — OAuth CSRF.** `/auth/google/login` generates a `state` but `/auth/google/callback` never verifies it (`backend/auth/routes.py:145`, self-noted in the code). Store `state` (signed cookie or Redis, short TTL) and compare on callback.
+- ✅ **L6 fixed** — Google token-exchange/userinfo failures logged the full response body at error level (`backend/auth/google_oauth.py`); now the status code logs at error level and the body only at debug (normally disabled in production).
 
 **Payment logic**
 - ✅ N/A in the dangerous sense — checkout is a stub that sets a plan with no charge and no client-trusted price. **When real payments land,** verify webhook signatures from the provider (Razorpay/Stripe), compute totals server-side, and gate paid features on server-verified payment status.
@@ -120,11 +119,11 @@ git rm -r --cached mcp/node_modules && git commit -m "chore: stop tracking mcp/n
 ## Check 5 — Attacker's Perspective Review *(ECC)*
 
 - **1. ID manipulation:** ✅ No horizontal access — user-scoped keys; `progress` and conversation endpoints reject other users' IDs.
-- **2. Login bypass:** ✅ No endpoint works without a valid credential; expired/malformed JWTs are rejected; disabled accounts are blocked (`is_active`). No default account with a *known* password (the seeded admin uses a generated password — but see L5).
+- **2. Login bypass:** ✅ No endpoint works without a valid credential; expired/malformed JWTs are rejected; disabled accounts are blocked (`is_active`). No default account with a known password — **L5 fixed**: the seeded admin now requires an explicit `ADMIN_PASSWORD` rather than falling back to a generated-and-logged one.
 - **3. Privilege escalation:** ✅ Role check is server-side (`is_admin`/env-admin); a regular user can't reach admin routes by editing a JWT (signature-protected) or guessing URLs (403). Admin routes reject API tokens entirely.
 - **4. Feature abuse:** ✅ signup/login/reset are now IP rate-limited (**H2 fixed**); uploads/AI-questions are quota-limited; webhook creation is plan-gated (Pro+).
 - **5. Content injection:** ✅ XSS sanitised (DOMPurify); SQLi not applicable (Redis).
-- **6. Internal exposure:** ⚠️ **L1** — `/docs` + `/redoc` publish the full API surface unauthenticated; **M4** — error responses leak internals. **H1 (Redis/RedisInsight reachable) is now fixed.** No `.env`/`.git` served by the API itself.
+- **6. Internal exposure:** ⚠️ **M4** — error responses leak internals (still open). **L1 fixed** — `/docs`/`/redoc`/`/openapi.json` are now gated behind `API_DOCS_ENABLED`. **H1 fixed** — Redis/RedisInsight no longer reachable. No `.env`/`.git` served by the API itself.
 - **7. Business-logic manipulation:** ✅ No negative amounts / discount stacking possible (billing is a no-charge stub with server-set plans). Re-audit this section the moment real payments are wired in.
 - ⚠️ **M2 — SSRF.** A user registers a webhook URL that Vaultly then POSTs to (`backend/integrations/webhooks.py:137`), and can trigger delivery on demand via `POST /integrations/webhooks/{id}/test`. There's no block-list for internal targets, so a webhook can point at `http://169.254.169.254/…` (cloud metadata), `http://localhost:6379`, or RFC-1918 hosts. The response body isn't returned, but status/timing is stored (`last_status`) — a blind SSRF + oracle. Validate the URL at registration: require `https`, resolve the host, and reject loopback/link-local/private/metadata ranges (guard against DNS-rebinding by re-checking at delivery).
 
@@ -146,7 +145,27 @@ git rm -r --cached mcp/node_modules && git commit -m "chore: stop tracking mcp/n
 7. **M2 — Validate webhook URLs** against internal ranges.
 8. **M6 — Verify the OAuth `state`** on callback.
 
-**Backlog / hygiene:** L1 (gate or disable `/docs` in prod), L2 (15-min reset TTL), L3 (logout revocation story), L4 (self-service account deletion/export), L5–L6 (avoid secrets in logs), L7 (`git rm --cached mcp/node_modules`).
+**Backlog / hygiene — all seven fixed:**
+
+- ✅ **L1** — `/docs`+`/redoc`+`/openapi.json` gated behind `API_DOCS_ENABLED` (`backend/main.py`).
+- ✅ **L2** — password-reset TTL 1h → 15min (`backend/auth/store.py`).
+- ✅ **L3** — logout revokes the presented JWT via a `jti` blacklist (`backend/auth/session_blacklist.py`), without touching other sessions.
+- ✅ **L4** — self-service `DELETE /auth/me` (session-only, password-reconfirmed); also fixed two pre-existing gaps in the shared hard-delete path (`admin.store.delete_user_completely`): the username index and conversation history were never cleaned up. **Export** is still not implemented.
+- ✅ **L5** — default-admin seeding no longer generates-and-logs a password; requires `ADMIN_PASSWORD` explicitly (`backend/main.py`).
+- ✅ **L6** — Google OAuth error bodies now log at debug only, not error (`backend/auth/google_oauth.py`).
+- ✅ **L7** — `git rm -r --cached mcp/node_modules` (3,696 files); still gitignored going forward.
+
+### Verification
+
+All of the above were verified against a **rebuilt, live Docker stack** (`docker compose up -d --build`), not just read — including:
+- Redis: unauthenticated connections rejected (`NOAUTH`), correct password succeeds, host port bound to `127.0.0.1` only (confirmed via `docker port`).
+- Rate limiting: exactly the configured number of login attempts pass before `429` (with `Retry-After`).
+- Logout: the exact bearer token issued at login is rejected (`401 "Session revoked"`) immediately after logout; a second device's token is untouched.
+- Self-service deletion: wrong password → `400`, correct password → `200` + account/email/username fully freed for reuse, confirmed via re-signup.
+- Password-reset token TTL confirmed at 895s (≤900s) via direct Redis `TTL` inspection.
+- Admin-seed log line confirmed to never contain a password.
+- Full backend test suite (**388 tests**, including 4 new `test_rate_limit.py` tests, 7 new logout/deletion tests, and a new regression test for the username-index bug) run inside the container against a real Redis instance — **all passing**.
+- `backend/tests/conftest.py`'s Redis fixtures needed a matching fix (they didn't pass a password, so every DB-touching test silently skipped once H1 landed) — a good reminder that hardening infra can silently break test isolation; `.github/workflows/ci.yml`'s Redis service was updated the same way so CI exercises the same authenticated path.
 
 ---
 
