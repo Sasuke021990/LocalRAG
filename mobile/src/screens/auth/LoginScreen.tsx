@@ -56,7 +56,7 @@ export default function LoginScreen({ navigation }: Props) {
       <Text style={styles.subtitle}>Sign in to your knowledge base.</Text>
 
       <Card style={{ gap: 12 }}>
-        <Input label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" />
+        <Input label="Email or username" value={email} onChangeText={setEmail} autoCapitalize="none" placeholder="you@example.com" />
         <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <Button title="Sign in" onPress={submit} loading={loading} />

@@ -1,41 +1,63 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { View, TextInput, StyleSheet, FlatList, Pressable, Text, KeyboardAvoidingView, Platform } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Send, Sparkles } from 'lucide-react-native'
-import ChatBubble, { ChatMsg } from '../components/ChatBubble'
-import { streamQuery } from '../api/query'
+import { useNavigation } from '@react-navigation/native'
+import { useQuery } from '@tanstack/react-query'
+import { Send, Sparkles, History, FolderOpen, ChevronDown } from 'lucide-react-native'
+import ChatBubble from '../components/ChatBubble'
+import PoolPickerModal from '../components/PoolPickerModal'
+import { useChatStore } from '../stores/chatStore'
+import { fetchPools } from '../api/documents'
 import { colors, fonts, radius } from '../theme/tokens'
 
 export default function ChatScreen() {
-  const [history, setHistory] = useState<ChatMsg[]>([])
+  const navigation = useNavigation<any>()
+  const history = useChatStore((s) => s.history)
+  const loading = useChatStore((s) => s.loading)
+  const pool = useChatStore((s) => s.pool)
+  const poolChosen = useChatStore((s) => s.poolChosen)
+  const choosePool = useChatStore((s) => s.choosePool)
+  const submit = useChatStore((s) => s.submit)
+
   const [text, setText] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const listRef = useRef<FlatList>(null)
 
-  function update(idx: number, patch: Partial<ChatMsg>) {
-    setHistory((h) => h.map((m, i) => (i === idx ? { ...m, ...patch } : m)))
-  }
+  const poolsQ = useQuery({ queryKey: ['pools'], queryFn: fetchPools })
+  const pools = poolsQ.data?.pools ?? []
 
-  function submit() {
+  // Prompt for a pool as soon as the user lands in Chat (or starts a new
+  // one) without having picked yet — mirrors web's auto-open behavior.
+  useEffect(() => {
+    if (!poolChosen) setPickerOpen(true)
+  }, [poolChosen])
+
+  function send() {
     const q = text.trim()
     if (!q || loading) return
-    setLoading(true); setText('')
-    const idx = history.length
-    setHistory((h) => [...h, { query: q, answer: '', reasoning: '', sources: [], streaming: true }])
+    setText('')
+    submit(q)
+  }
 
-    streamQuery(q, 10, 5, {
-      onSources: (s) => update(idx, { sources: s }),
-      onThinking: (t) => setHistory((h) => h.map((m, i) => (i === idx ? { ...m, reasoning: (m.reasoning || '') + t } : m))),
-      onToken: (t) => setHistory((h) => h.map((m, i) => (i === idx ? { ...m, answer: m.answer + t } : m))),
-      onRefusal: (mm) => update(idx, { answer: mm, refused: true }),
-      onDone: (d) => update(idx, { answer: d.answer ?? undefined, reasoning: d.reasoning, refused: d.refused, streaming: false }),
-      onError: () => { update(idx, { streaming: false }); },
-    }).finally(() => setLoading(false))
+  function choose(p: string) {
+    choosePool(p)
+    setPickerOpen(false)
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={styles.header}>
+          <Pressable style={styles.poolPill} onPress={() => setPickerOpen(true)}>
+            <FolderOpen color={colors.indigo} size={14} />
+            <Text style={styles.poolPillText} numberOfLines={1}>{pool || 'All pools'}</Text>
+            <ChevronDown color={colors.indigo} size={14} />
+          </Pressable>
+          <Pressable style={styles.historyBtn} onPress={() => navigation.navigate('Conversations')} hitSlop={8}>
+            <History color={colors.inkSoft} size={20} />
+          </Pressable>
+        </View>
+
         {history.length === 0 ? (
           <View style={styles.emptyWrap}>
             <View style={styles.emptyChip}><Sparkles color={colors.pink} size={26} /></View>
@@ -62,17 +84,37 @@ export default function ChatScreen() {
             placeholderTextColor={colors.inkMuted}
             multiline
           />
-          <Pressable style={styles.send} onPress={submit} disabled={loading || !text.trim()}>
+          <Pressable style={styles.send} onPress={send} disabled={loading || !text.trim()}>
             <Send color="#fff" size={18} />
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      <PoolPickerModal
+        visible={pickerOpen}
+        pools={pools}
+        selected={pool}
+        onChoose={choose}
+        onDismiss={() => setPickerOpen(false)}
+      />
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  poolPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1,
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
+    paddingHorizontal: 12, paddingVertical: 7, backgroundColor: colors.indigoSoft,
+  },
+  poolPillText: { fontFamily: fonts.bodySemi, fontSize: 13, color: colors.indigo, flexShrink: 1 },
+  historyBtn: { padding: 4 },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 10 },
   emptyChip: { width: 56, height: 56, borderRadius: 18, backgroundColor: colors.pinkSoft, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontFamily: fonts.displaySemi, fontSize: 17, color: colors.ink, textAlign: 'center' },
