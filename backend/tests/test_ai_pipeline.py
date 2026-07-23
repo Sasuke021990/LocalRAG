@@ -38,18 +38,21 @@ class FakeCache:
 
 
 class FakeLLM:
-    """Streams a canned output; records whether it was called (for gate tests)
-    and the last history it was given (for conversational-memory tests)."""
+    """Streams a canned output; records whether it was called (for gate tests),
+    the last history it was given (for conversational-memory tests), and the
+    last user-turn text (for the thinking-directive tests)."""
     def __init__(self, output="", ready=True):
         self.output = output
         self._ready = ready
         self.called = False
         self.last_history = None
+        self.last_user = None
     @property
     def ready(self): return self._ready
     async def generate_stream(self, system, user, history=None):
         self.called = True
         self.last_history = history
+        self.last_user = user
         for tok in self.output:   # yield char by char to exercise streaming
             yield tok
 
@@ -168,6 +171,43 @@ class TestGeneration:
         done = events[-1][1]
         assert done["cached"] is True
         assert done["answer"] == "cached answer"
+
+
+@pytest.mark.anyio
+class TestThinkingDirectiveReachesModel:
+    """
+    A hybrid-thinking model (e.g. Qwen3.5) can default to reasoning even when
+    build_system_prompt's `thinking` flag doesn't ask for it -- the /think
+    /no_think soft switch appended to the model-facing query is the belt to
+    that prompt's suspenders. Confirms it's wired end-to-end through the
+    pipeline without leaking into retrieval, caching, or persisted history.
+    """
+    async def test_no_think_appended_when_thinking_disabled(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_THINKING_ENABLED", False)
+        llm = FakeLLM("answer")
+        await _drain(**_base(query="what is X?", llm=llm))
+        assert llm.last_user == "what is X? /no_think"
+
+    async def test_think_appended_when_thinking_enabled(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_THINKING_ENABLED", True)
+        llm = FakeLLM("answer")
+        await _drain(**_base(query="what is X?", llm=llm))
+        assert llm.last_user == "what is X? /think"
+
+    async def test_directive_does_not_affect_retrieval_query(self, monkeypatch):
+        # The search fake only returns results for the exact clean query --
+        # if the directive leaked into retrieval, this would refuse instead.
+        monkeypatch.setattr(config, "LLM_THINKING_ENABLED", False)
+        search = FakeSearch([_Result("X is a thing.", 0.9)])
+        events = await _drain(**_base(query="what is X?", hybrid_search=search, llm=FakeLLM("answer")))
+        assert events[-1][1]["refused"] is False
+
+    async def test_directive_does_not_leak_into_fallback_answer_text(self, monkeypatch):
+        # Disabled LLM -> fallback path uses the original `query`, not the
+        # model-facing one, so the displayed text must not contain "/no_think".
+        monkeypatch.setattr(config, "LLM_THINKING_ENABLED", False)
+        events = await _drain(**_base(query="what is X?", llm=FakeLLM("", ready=False)))
+        assert "/no_think" not in events[-1][1]["answer"]
 
 
 @pytest.mark.anyio

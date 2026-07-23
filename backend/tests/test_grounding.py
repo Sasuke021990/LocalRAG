@@ -125,6 +125,19 @@ class TestPromptBuilder:
         assert grounding.build_grounded_messages("q", ["c"], history=None) == grounding.build_grounded_messages("q", ["c"])
 
 
+class TestThinkingDirective:
+    def test_thinking_true_appends_think(self):
+        assert grounding.thinking_directive(True) == " /think"
+
+    def test_thinking_false_appends_no_think(self):
+        assert grounding.thinking_directive(False) == " /no_think"
+
+    def test_directive_is_a_suffix_not_a_replacement(self):
+        query = "what is X?"
+        assert (query + grounding.thinking_directive(True)).startswith(query)
+        assert (query + grounding.thinking_directive(False)).startswith(query)
+
+
 class TestChatMessagesAndFormatting:
     def test_chat_messages_no_history(self):
         msgs = grounding.chat_messages("sys", "usr")
