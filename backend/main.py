@@ -24,7 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -622,7 +622,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
 
 
 @app.post("/query/stream", tags=["Search"], summary="Streaming grounded AI answer (SSE)")
-async def query_stream(request: QueryRequest, user_id: str = Depends(require_current_user)):
+async def query_stream(http_request: Request, request: QueryRequest, user_id: str = Depends(require_current_user)):
     """
     Server-Sent Events version of ``/query`` that streams a grounded AI answer.
 
@@ -634,6 +634,14 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(require_cur
     Persists both the question and the answer once the stream completes
     successfully (nothing is saved if the stream errors out partway through),
     and threads prior turns into the prompt for follow-up context.
+
+    Stops generation the moment the client disconnects (navigates away /
+    closes the tab mid-answer) instead of letting the LLM keep running to
+    completion for a response nobody will receive — checked before every
+    yield, and ``agen.aclose()`` propagates a GeneratorExit all the way down
+    through ``stream_answer`` into the LLM backend, which signals its
+    background thread to stop pulling more tokens and close the connection
+    to the inference server. See generation/llm.py's ``cancel_event``.
     """
     # Daily AI-question quota — raised as a normal 429 *before* the SSE stream
     # opens, so the client gets a clean HTTP error (not a mid-stream event).
@@ -645,14 +653,18 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(require_cur
 
     async def _events():
         final_data = None
+        agen = answer_pipeline.stream_answer(
+            user_id=user_id, query=request.query,
+            top_k=request.top_k, rerank_top_k=request.rerank_top_k,
+            hybrid_search=hybrid_search, reranker=reranker,
+            semantic_cache=semantic_cache, llm=local_llm,
+            pool=request.pool or None, history=history,
+        )
         try:
-            async for event, data in answer_pipeline.stream_answer(
-                user_id=user_id, query=request.query,
-                top_k=request.top_k, rerank_top_k=request.rerank_top_k,
-                hybrid_search=hybrid_search, reranker=reranker,
-                semantic_cache=semantic_cache, llm=local_llm,
-                pool=request.pool or None, history=history,
-            ):
+            async for event, data in agen:
+                if await http_request.is_disconnected():
+                    logger.info(f"Client disconnected mid-stream (user={user_id}) — stopping generation")
+                    break
                 if event == "done":
                     data = {**data, "conversation_id": conv["id"]}
                     final_data = data
@@ -663,6 +675,8 @@ async def query_stream(request: QueryRequest, user_id: str = Depends(require_cur
             logger.error(f"Query stream error: {exc}")
             yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
             return
+        finally:
+            await agen.aclose()
 
         if final_data:
             _persist_turn(user_id, conv["id"], request.query, final_data, request.pool)

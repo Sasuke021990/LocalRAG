@@ -3,6 +3,7 @@ Tests for the pluggable LLM backends — backend selection and the
 OpenAI-compatible streaming parser (with `requests` mocked; no server needed).
 """
 
+import asyncio
 import json
 
 import pytest
@@ -26,10 +27,15 @@ class TestBackendSelection:
 
 
 class _FakeStreamResponse:
-    """Mimics requests' streaming Response for SSE chat completions."""
+    """Mimics requests' streaming Response for SSE chat completions. Accepts
+    any iterable for `tokens` (including an infinite generator, for the
+    early-cancellation tests) since it's only ever consumed via `for`."""
     def __init__(self, tokens):
         self._tokens = tokens
+        self.closed = False
     def raise_for_status(self): pass
+    def close(self):
+        self.closed = True
     def iter_lines(self, decode_unicode=True):
         for t in self._tokens:
             yield "data: " + json.dumps({"choices": [{"delta": {"content": t}}]})
@@ -110,6 +116,92 @@ class TestOpenAIStreaming:
         backend = llm_module.OpenAICompatibleLLM()
         [t async for t in backend.generate_stream("s", "u")]
         assert captured["headers"]["Authorization"] == "Bearer secret-key"
+
+    async def test_normal_completion_closes_the_connection(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_ENABLED", True)
+        fake_resp = _FakeStreamResponse(["a", "b"])
+        monkeypatch.setattr(llm_module.requests, "post", lambda *a, **k: fake_resp)
+        backend = llm_module.OpenAICompatibleLLM()
+        [t async for t in backend.generate_stream("s", "u")]
+        assert fake_resp.closed is True
+
+    async def test_client_disconnect_stops_generation_and_closes_connection(self, monkeypatch):
+        """
+        Regression test for the "navigate away mid-answer" bug: main.py's
+        query_stream calls agen.aclose() the moment it detects the client
+        disconnected. That must propagate all the way down into this
+        background-thread HTTP call -- stopping it from pulling further
+        tokens and closing the connection to the inference server, instead
+        of it running to completion (or, as here, forever) for an answer
+        nobody will receive.
+
+        Uses an infinite token source: without the cancel_event fix, this
+        test would hang until the asyncio.wait_for timeouts below fire,
+        making a regression an unambiguous failure rather than a flake.
+        """
+        monkeypatch.setattr(config, "LLM_ENABLED", True)
+
+        def infinite_tokens():
+            while True:
+                yield "x"
+
+        fake_resp = _FakeStreamResponse(infinite_tokens())
+        monkeypatch.setattr(llm_module.requests, "post", lambda *a, **k: fake_resp)
+        backend = llm_module.OpenAICompatibleLLM()
+        agen = backend.generate_stream("s", "u")
+
+        first = await asyncio.wait_for(agen.__anext__(), timeout=5)
+        assert first == "x"
+
+        # Simulates the client disconnecting mid-stream.
+        await asyncio.wait_for(agen.aclose(), timeout=5)
+
+        # The background thread runs concurrently -- give it a brief window
+        # to notice cancel_event and run its own finally block.
+        for _ in range(50):
+            if fake_resp.closed:
+                break
+            await asyncio.sleep(0.05)
+        assert fake_resp.closed is True
+
+
+@pytest.mark.anyio
+class TestEmbeddedStreaming:
+    def _fake_backend(self, monkeypatch, chunk_source):
+        monkeypatch.setattr(config, "LLM_ENABLED", True)
+        backend = llm_module.EmbeddedLLM()
+        backend._loaded = True
+        backend._llama = lambda prompt, max_tokens, temperature, stream: chunk_source()
+        return backend
+
+    async def test_streams_tokens(self, monkeypatch):
+        backend = self._fake_backend(
+            monkeypatch, lambda: iter({"choices": [{"text": c}]} for c in ["Hello", " ", "world"]),
+        )
+        out = [t async for t in backend.generate_stream("sys", "user")]
+        assert "".join(out) == "Hello world"
+
+    async def test_client_disconnect_stops_pulling_more_chunks(self, monkeypatch):
+        """
+        Same regression as the OpenAI-compatible backend, for the embedded
+        llama.cpp path: an infinite chunk source would hang forever without
+        the cancel_event check, since nothing else would ever stop the
+        background thread's `for chunk in self._llama(...)` loop.
+        """
+        def infinite_chunks():
+            while True:
+                yield {"choices": [{"text": "x"}]}
+
+        backend = self._fake_backend(monkeypatch, infinite_chunks)
+        agen = backend.generate_stream("sys", "user")
+
+        first = await asyncio.wait_for(agen.__anext__(), timeout=5)
+        assert first == "x"
+
+        # Would hang past the timeout (failing the test) if the background
+        # thread never checks cancel_event and keeps consuming the infinite
+        # generator forever.
+        await asyncio.wait_for(agen.aclose(), timeout=5)
 
 
 @pytest.fixture

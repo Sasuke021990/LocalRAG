@@ -25,6 +25,7 @@ ranked passages) — generation never crashes a request.
 import asyncio
 import json
 import logging
+import threading
 from typing import AsyncIterator, List, Optional
 
 import requests
@@ -99,6 +100,13 @@ class EmbeddedLLM(BaseLLM):
             loop = asyncio.get_event_loop()
             queue: asyncio.Queue = asyncio.Queue()
             _SENTINEL = object()
+            # Set when the consumer stops listening (client disconnected —
+            # see main.py's query_stream). _produce() runs in a plain thread
+            # via run_in_executor, so it has no idea an asyncio task got
+            # cancelled; without this it would keep pulling tokens from
+            # llama.cpp — burning generation time under the shared lock —
+            # for an answer nobody will ever receive.
+            cancel_event = threading.Event()
 
             def _produce():
                 try:
@@ -108,20 +116,29 @@ class EmbeddedLLM(BaseLLM):
                         temperature=config.LLM_TEMPERATURE,
                         stream=True,
                     ):
+                        if cancel_event.is_set():
+                            break
                         token = chunk["choices"][0]["text"]
                         if token:
                             loop.call_soon_threadsafe(queue.put_nowait, token)
                 except Exception as exc:
-                    logger.error(f"Embedded generation failed: {exc}")
+                    if not cancel_event.is_set():
+                        logger.error(f"Embedded generation failed: {exc}")
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
             loop.run_in_executor(None, _produce)
-            while True:
-                item = await queue.get()
-                if item is _SENTINEL:
-                    break
-                yield item
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is _SENTINEL:
+                        break
+                    yield item
+            finally:
+                # Reached on normal completion (harmless no-op — _produce
+                # already finished) and on early teardown via GeneratorExit
+                # when the caller stops iterating (client disconnect).
+                cancel_event.set()
 
 
 class OpenAICompatibleLLM(BaseLLM):
@@ -176,8 +193,17 @@ class OpenAICompatibleLLM(BaseLLM):
             loop = asyncio.get_event_loop()
             queue: asyncio.Queue = asyncio.Queue()
             _SENTINEL = object()
+            # Set when the consumer stops listening (client disconnected —
+            # see main.py's query_stream). _produce() runs in a plain thread
+            # via run_in_executor and is doing a *blocking* HTTP read loop
+            # against the inference server; it has no idea an asyncio task
+            # got cancelled. Without this, the server would keep generating
+            # (and this thread would keep pulling tokens) for an answer
+            # nobody will ever receive.
+            cancel_event = threading.Event()
 
             def _produce():
+                resp = None
                 try:
                     resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=120)
                     resp.raise_for_status()
@@ -188,6 +214,8 @@ class OpenAICompatibleLLM(BaseLLM):
                     # so decode_unicode below decodes correctly.
                     resp.encoding = "utf-8"
                     for raw in resp.iter_lines(decode_unicode=True):
+                        if cancel_event.is_set():
+                            break
                         if not raw or not raw.startswith("data:"):
                             continue
                         data = raw[len("data:"):].strip()
@@ -201,16 +229,28 @@ class OpenAICompatibleLLM(BaseLLM):
                         if token:
                             loop.call_soon_threadsafe(queue.put_nowait, token)
                 except Exception as exc:
-                    logger.error(f"Inference-server generation failed: {exc}")
+                    if not cancel_event.is_set():
+                        logger.error(f"Inference-server generation failed: {exc}")
                 finally:
+                    if resp is not None:
+                        # Actually closes the connection to the inference
+                        # server -- the only thing that tells *it* to stop
+                        # generating too, rather than just us stopping reading.
+                        resp.close()
                     loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
             loop.run_in_executor(None, _produce)
-            while True:
-                item = await queue.get()
-                if item is _SENTINEL:
-                    break
-                yield item
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is _SENTINEL:
+                        break
+                    yield item
+            finally:
+                # Reached on normal completion (harmless no-op — _produce
+                # already finished) and on early teardown via GeneratorExit
+                # when the caller stops iterating (client disconnect).
+                cancel_event.set()
         finally:
             self._release()
 
