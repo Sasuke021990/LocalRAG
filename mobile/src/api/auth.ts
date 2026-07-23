@@ -2,19 +2,23 @@ import { request, jsonBody } from './client'
 
 export interface User {
   user_id: string
+  username: string
   email: string
   storage_used_bytes: number
   storage_quota_bytes: number
   plan: string
   is_admin: boolean
+  idle_timeout_seconds?: number
   session_token?: string
 }
 
-export const signup = (email: string, password: string) =>
-  request<User>('/auth/signup', jsonBody('POST', { email, password }))
+export const signup = (username: string, email: string, password: string) =>
+  request<User>('/auth/signup', jsonBody('POST', { username, email, password }))
 
-export const login = (email: string, password: string) =>
-  request<User>('/auth/login', jsonBody('POST', { email, password }))
+// `identifier` accepts either an email address or a username — the backend
+// tries email first, then falls back to username (auth.store.get_user_by_identifier).
+export const login = (identifier: string, password: string) =>
+  request<User>('/auth/login', jsonBody('POST', { email: identifier, password }))
 
 export const getCurrentUser = () => request<User>('/auth/me')
 

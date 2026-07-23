@@ -13,10 +13,11 @@ const map: Record<Color, { bg: string; fg: string }> = {
   slate: { bg: 'rgba(107,104,128,0.12)', fg: colors.inkSoft },
 }
 
-export default function Badge({ label, color = 'indigo' }: { label: string; color?: Color }) {
+export default function Badge({ label, color = 'indigo', icon }: { label: string; color?: Color; icon?: React.ReactNode }) {
   const c = map[color]
   return (
-    <View style={[styles.pill, { backgroundColor: c.bg }]}>
+    <View style={[styles.pill, { backgroundColor: c.bg }, icon ? styles.pillWithIcon : null]}>
+      {icon}
       <Text style={[styles.text, { color: c.fg }]}>{label}</Text>
     </View>
   )
@@ -24,5 +25,6 @@ export default function Badge({ label, color = 'indigo' }: { label: string; colo
 
 const styles = StyleSheet.create({
   pill: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: radius.pill, alignSelf: 'flex-start' },
+  pillWithIcon: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   text: { fontFamily: fonts.bodySemi, fontSize: 11 },
 })

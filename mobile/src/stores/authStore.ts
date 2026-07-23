@@ -9,8 +9,8 @@ interface AuthState {
   checked: boolean
   hydrate: () => Promise<void>
   refresh: () => Promise<void>
-  login: (email: string, password: string) => Promise<void>
-  signup: (email: string, password: string) => Promise<void>
+  login: (identifier: string, password: string) => Promise<void>
+  signup: (username: string, email: string, password: string) => Promise<void>
   loginWithGoogleCode: (code: string) => Promise<void>
   logout: () => Promise<void>
 }
@@ -45,14 +45,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user })
   },
 
-  login: async (email, password) => {
-    const user = await authApi.login(email, password)
+  login: async (identifier, password) => {
+    const user = await authApi.login(identifier, password)
     await persist(user)
     set({ user, checked: true })
   },
 
-  signup: async (email, password) => {
-    const user = await authApi.signup(email, password)
+  signup: async (username, email, password) => {
+    const user = await authApi.signup(username, email, password)
     await persist(user)
     set({ user, checked: true })
   },

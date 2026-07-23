@@ -45,6 +45,13 @@ export default function SettingsScreen() {
         <Button title="Update password" onPress={save} loading={saving} />
       </Card>
 
+      {user?.is_admin ? (
+        <Card style={{ gap: 12 }}>
+          <Text style={styles.section}>Admin</Text>
+          <Button title="Open admin panel" variant="secondary" onPress={() => nav.navigate('Admin')} />
+        </Card>
+      ) : null}
+
       <Card style={{ gap: 12 }}>
         <Button title="View plans & billing" variant="secondary" onPress={() => nav.navigate('Billing')} />
         <Button title="Log out" variant="danger" onPress={logout} />

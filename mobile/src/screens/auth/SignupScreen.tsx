@@ -14,6 +14,7 @@ type Props = NativeStackScreenProps<AuthStackParams, 'Signup'>
 
 export default function SignupScreen({ navigation }: Props) {
   const signup = useAuthStore((s) => s.signup)
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -25,7 +26,7 @@ export default function SignupScreen({ navigation }: Props) {
     if (password.length < 8) { setError('Password must be at least 8 characters.'); return }
     if (password !== confirm) { setError('Passwords do not match.'); return }
     setLoading(true)
-    try { await signup(email.trim(), password) }
+    try { await signup(username.trim(), email.trim(), password) }
     catch (e: any) { setError(e.message || 'Signup failed') }
     finally { setLoading(false) }
   }
@@ -37,7 +38,8 @@ export default function SignupScreen({ navigation }: Props) {
       <Text style={styles.subtitle}>1 GB free — your documents, always yours.</Text>
 
       <Card style={{ gap: 12 }}>
-        <Input label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" />
+        <Input label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" placeholder="e.g. alice" />
+        <Input label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder="you@example.com" />
         <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 8 characters" />
         <Input label="Confirm password" value={confirm} onChangeText={setConfirm} secureTextEntry placeholder="••••••••" />
         {error ? <Text style={styles.error}>{error}</Text> : null}

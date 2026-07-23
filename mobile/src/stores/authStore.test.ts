@@ -15,7 +15,7 @@ jest.mock('../api/client', () => ({
 import * as authApi from '../api/auth'
 import { setToken, clearToken, getToken } from '../api/client'
 
-const USER = { user_id: 'u1', email: 'a@example.com', storage_used_bytes: 0, storage_quota_bytes: 100, is_admin: false, session_token: 'jwt-123' }
+const USER = { user_id: 'u1', username: 'alice', email: 'a@example.com', storage_used_bytes: 0, storage_quota_bytes: 100, is_admin: false, session_token: 'jwt-123' }
 
 beforeEach(() => {
   jest.clearAllMocks()
@@ -27,6 +27,21 @@ test('login stores user + persists the token', async () => {
   await useAuthStore.getState().login('a@example.com', 'pw')
   expect(useAuthStore.getState().user?.email).toBe('a@example.com')
   expect(setToken).toHaveBeenCalledWith('jwt-123')
+})
+
+test('signup passes username, email, password and persists the token', async () => {
+  ;(authApi.signup as jest.Mock).mockResolvedValue(USER)
+  await useAuthStore.getState().signup('alice', 'a@example.com', 'pw')
+  expect(authApi.signup).toHaveBeenCalledWith('alice', 'a@example.com', 'pw')
+  expect(useAuthStore.getState().user?.username).toBe('alice')
+  expect(setToken).toHaveBeenCalledWith('jwt-123')
+})
+
+test('login accepts a username as the identifier too', async () => {
+  ;(authApi.login as jest.Mock).mockResolvedValue(USER)
+  await useAuthStore.getState().login('alice', 'pw')
+  expect(authApi.login).toHaveBeenCalledWith('alice', 'pw')
+  expect(useAuthStore.getState().user?.username).toBe('alice')
 })
 
 test('logout clears user + token', async () => {

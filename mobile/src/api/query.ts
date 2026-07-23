@@ -1,10 +1,20 @@
 import { request, jsonBody, getToken, API_BASE } from './client'
 
 export interface Source { file_name: string; pool: string; chunk_index: number; score: number; content: string }
-export interface QueryResult { answer: string; sources: Source[]; processing_time: number; reasoning?: string; refused?: boolean }
+export interface QueryResult {
+  answer: string
+  sources: Source[]
+  processing_time: number
+  reasoning?: string
+  refused?: boolean
+  conversation_id?: string
+}
 
-export const sendQuery = (query: string, topK = 10, rerankTopK = 5) =>
-  request<QueryResult>('/query', jsonBody('POST', { query, top_k: topK, rerank_top_k: rerankTopK }))
+export const sendQuery = (query: string, topK = 10, rerankTopK = 5, pool = '', conversationId = '') =>
+  request<QueryResult>('/query', jsonBody('POST', {
+    query, top_k: topK, rerank_top_k: rerankTopK,
+    pool: pool || null, conversation_id: conversationId || null,
+  }))
 
 // Blank-line SSE frame separator, tolerant of \r\n / \r / \n line endings.
 const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/
@@ -18,12 +28,22 @@ export interface StreamHandlers {
   onError?: (e: Error) => void
 }
 
+export interface StreamOptions {
+  topK?: number
+  rerankTopK?: number
+  pool?: string
+  conversationId?: string
+}
+
 /**
  * Attempt real SSE streaming; if the RN runtime doesn't expose a readable
  * response body, fall back to the plain /query endpoint and reveal the answer
  * word-by-word (~35ms/word) — visually similar, fully reliable on-device.
+ * `onDone`'s payload includes `conversation_id` — new if `conversationId` was
+ * blank (a fresh conversation was created), otherwise the one passed in.
  */
-export async function streamQuery(query: string, topK = 10, rerankTopK = 5, h: StreamHandlers = {}) {
+export async function streamQuery(query: string, opts: StreamOptions = {}, h: StreamHandlers = {}) {
+  const { topK = 10, rerankTopK = 5, pool = '', conversationId = '' } = opts
   try {
     const token = await getToken()
     const res = await fetch(`${API_BASE}/query/stream`, {
@@ -32,10 +52,13 @@ export async function streamQuery(query: string, topK = 10, rerankTopK = 5, h: S
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ query, top_k: topK, rerank_top_k: rerankTopK }),
+      body: JSON.stringify({
+        query, top_k: topK, rerank_top_k: rerankTopK,
+        pool: pool || null, conversation_id: conversationId || null,
+      }),
     })
     const reader = (res as any).body?.getReader?.()
-    if (!reader) return await fallback(query, topK, rerankTopK, h)
+    if (!reader) return await fallback(query, topK, rerankTopK, pool, conversationId, h)
 
     const decoder = new TextDecoder()
     let buffer = ''
@@ -53,7 +76,7 @@ export async function streamQuery(query: string, topK = 10, rerankTopK = 5, h: S
     }
   } catch (e: any) {
     // Any streaming failure → reliable fallback path.
-    try { await fallback(query, topK, rerankTopK, h) } catch (err: any) { h.onError?.(err) }
+    try { await fallback(query, topK, rerankTopK, pool, conversationId, h) } catch (err: any) { h.onError?.(err) }
   }
 }
 
@@ -75,8 +98,8 @@ function dispatch(frame: string, h: StreamHandlers) {
   else if (event === 'error') h.onError?.(new Error(data?.detail || 'stream error'))
 }
 
-async function fallback(query: string, topK: number, rerankTopK: number, h: StreamHandlers) {
-  const res = await sendQuery(query, topK, rerankTopK)
+async function fallback(query: string, topK: number, rerankTopK: number, pool: string, conversationId: string, h: StreamHandlers) {
+  const res = await sendQuery(query, topK, rerankTopK, pool, conversationId)
   h.onSources?.(res.sources || [])
   if (res.refused) {
     h.onRefusal?.(res.answer)
