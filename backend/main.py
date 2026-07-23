@@ -20,7 +20,6 @@ import asyncio
 import json
 import logging
 import os
-import secrets
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -75,8 +74,13 @@ app = FastAPI(
         "portable JSON backups under `<DATA_DIR>/<user_id>/<pool>/` (durability)."
     ),
     version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # Gated behind API_DOCS_ENABLED: /docs+/redoc publish the full API surface
+    # (routes, schemas) unauthenticated — fine for local/homelab use, but
+    # should be disabled for any internet-facing deployment that doesn't
+    # need public API docs. See SECURITY.md (finding L1).
+    docs_url="/docs" if config.API_DOCS_ENABLED else None,
+    redoc_url="/redoc" if config.API_DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if config.API_DOCS_ENABLED else None,
 )
 
 app.add_middleware(
@@ -123,22 +127,30 @@ except Exception as exc:
 def _seed_default_admin():
     """
     Seed a default admin account so a fresh deployment has someone who can log
-    in and reach the admin panel. Runs only when ``ADMIN_EMAIL`` is set. If
-    ``ADMIN_PASSWORD`` is empty a random one is generated and logged **once**,
-    at creation time — the operator is expected to change it after first login.
+    in and reach the admin panel. Runs only when both ``ADMIN_EMAIL`` and
+    ``ADMIN_PASSWORD`` are set explicitly.
+
+    Deliberately does NOT fall back to a randomly-generated password: that
+    password would have to be surfaced via a startup log line, and container
+    logs routinely end up shipped to a log aggregator, CI output, or a
+    support ticket -- a genuinely secret credential doesn't belong there (see
+    SECURITY.md finding L5). If ``ADMIN_PASSWORD`` is missing, seeding is
+    skipped with a warning; the operator sets it explicitly, or promotes an
+    existing user to admin via the admin panel instead.
+
     Idempotent: on later boots the account already exists and nothing changes.
     """
     if not config.ADMIN_EMAIL:
         return
-    password = config.ADMIN_PASSWORD or secrets.token_urlsafe(16)
-    user_id = auth_store.ensure_default_admin(auth_redis_client, config.ADMIN_EMAIL, password)
-    if user_id is not None and not config.ADMIN_PASSWORD:
-        # Only surfaced for a freshly-created account with a generated password.
+    if not config.ADMIN_PASSWORD:
         logger.warning(
-            "Seeded default admin '%s' with a GENERATED password: %s — "
-            "log in and change it now (set ADMIN_PASSWORD to silence this).",
-            config.ADMIN_EMAIL, password,
+            "ADMIN_EMAIL is set but ADMIN_PASSWORD is not -- skipping default admin "
+            "seed. Set ADMIN_PASSWORD in .env to seed '%s' as an admin on next "
+            "startup, or promote an existing user to admin from the admin panel.",
+            config.ADMIN_EMAIL,
         )
+        return
+    auth_store.ensure_default_admin(auth_redis_client, config.ADMIN_EMAIL, config.ADMIN_PASSWORD)
 
 
 # ─── Startup event ────────────────────────────────────────────────────────────
@@ -317,6 +329,8 @@ async def delete_document(
             raise HTTPException(status_code=404, detail="Document not found")
         quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed_bytes)
         hybrid_search.invalidate_bm25(user_id)
+        # Drop cached answers — they may cite the now-deleted document.
+        semantic_cache.clear_cache(user_id)
         background_tasks.add_task(
             webhooks.dispatch_event,
             auth_redis_client,
@@ -350,6 +364,8 @@ async def move_document(
     if meta is None:
         raise HTTPException(status_code=404, detail="Document not found in the given pool")
     hybrid_search.invalidate_bm25(user_id)
+    # A moved doc changes which pool-scoped searches surface it — drop cached answers.
+    semantic_cache.clear_cache(user_id)
     return {"status": "moved", "document": meta}
 
 
@@ -455,8 +471,12 @@ async def upload_document(
                         {"file_name": file.filename, "pool": safe_pool, "reason": "quota_exceeded"},
                     )
                 else:
-                    # New/changed document set for this user — drop the stale BM25 cache.
+                    # New/changed document set for this user — drop the stale
+                    # BM25 cache and any cached answers (they were computed
+                    # before this document existed, e.g. a "key points" query
+                    # that must now also consider the newly-added file).
                     hybrid_search.invalidate_bm25(user_id)
+                    semantic_cache.clear_cache(user_id)
                     upload_progress.set_progress(
                         auth_redis_client, task_id, user_id, 100,
                         "Done — ready to search", status="complete",

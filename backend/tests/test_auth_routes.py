@@ -160,6 +160,89 @@ class TestLogout:
 
         assert auth_client.get("/auth/me").status_code == 401
 
+    def test_logout_revokes_the_bearer_token_itself(self, auth_client):
+        """
+        A stateless JWT would otherwise stay valid until exp even after
+        logout -- prove the presented token is actually blacklisted
+        server-side (SECURITY.md L3), not just that the cookie is cleared.
+        """
+        signup = auth_client.post("/auth/signup", json={"email": "ivan@example.com", "password": "longenough123"})
+        token = signup.json()["session_token"]
+
+        # Log out via the cookie set at signup.
+        assert auth_client.post("/auth/logout").status_code == 200
+
+        # The exact token issued at signup must no longer work, even
+        # presented fresh as a bearer header (no cookie involved).
+        resp = auth_client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 401
+
+    def test_logout_does_not_revoke_other_sessions(self, auth_client):
+        """Logging out one device must not log out a second device's token
+        (that's what change-password/reset already do via token_version)."""
+        signup = auth_client.post("/auth/signup", json={"email": "judy@example.com", "password": "longenough123"})
+        first_token = signup.json()["session_token"]
+
+        login = auth_client.post("/auth/login", json={"email": "judy@example.com", "password": "longenough123"})
+        second_token = login.json()["session_token"]
+
+        assert auth_client.post("/auth/logout").status_code == 200  # revokes the cookie's token (2nd login's)
+
+        # The first device's token is untouched.
+        resp = auth_client.get("/auth/me", headers={"Authorization": f"Bearer {first_token}"})
+        assert resp.status_code == 200
+        assert second_token != first_token
+
+
+class TestSelfServiceAccountDeletion:
+    """
+    Uses ``api_client`` (auth + integrations + admin mounted) rather than
+    ``auth_client`` so these tests can mint an MCP token to prove it's
+    rejected -- self-service deletion must be session-only.
+    """
+
+    def test_delete_own_account_removes_everything(self, api_client):
+        api_client.post("/auth/signup", json={"email": "karl@example.com", "password": "longenough123"})
+        assert api_client.get("/auth/me").status_code == 200
+
+        resp = api_client.request("DELETE", "/auth/me", json={"password": "longenough123"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "account_deleted"
+
+        # Session is gone (cookie cleared + user record no longer exists).
+        assert api_client.get("/auth/me").status_code == 401
+
+        # The email is free again -- proves the account was actually removed,
+        # not just logged out.
+        signup_again = api_client.post("/auth/signup", json={"email": "karl@example.com", "password": "differentpass1"})
+        assert signup_again.status_code == 200
+
+    def test_delete_own_account_wrong_password_400(self, api_client):
+        api_client.post("/auth/signup", json={"email": "leah@example.com", "password": "longenough123"})
+        resp = api_client.request("DELETE", "/auth/me", json={"password": "wrongpassword"})
+        assert resp.status_code == 400
+        # Account must still exist and be reachable.
+        assert api_client.get("/auth/me").status_code == 200
+
+    def test_delete_own_account_requires_auth(self, api_client):
+        resp = api_client.request("DELETE", "/auth/me", json={"password": "whatever"})
+        assert resp.status_code == 401
+
+    def test_delete_own_account_rejects_mcp_token(self, api_client):
+        """A leaked API token must not be able to wipe the account it belongs to."""
+        api_client.post("/auth/signup", json={"email": "mallory@example.com", "password": "longenough123"})
+        token_resp = api_client.post("/integrations/tokens", json={"name": "ci"})
+        assert token_resp.status_code == 200
+        mcp_token = token_resp.json()["token"]
+
+        api_client.cookies.clear()
+        resp = api_client.request(
+            "DELETE", "/auth/me",
+            headers={"Authorization": f"Bearer {mcp_token}"},
+            json={"password": "longenough123"},
+        )
+        assert resp.status_code == 401
+
 
 class TestProtectedRoutes:
     def test_protected_route_without_session_401(self, auth_client):

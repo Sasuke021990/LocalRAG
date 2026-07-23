@@ -1,19 +1,20 @@
 version: '3.8'
 
 services:
+  # SECURITY: password-protected and not published on a public interface.
+  # The backend reaches Redis over the compose network as `redis:6379`; no host
+  # port mapping is exposed. Redis holds every tenant's password hashes, tokens,
+  # and PII — never bind 6379/8001 to a public address. See SECURITY.md (H1).
   redis:
     image: redis/redis-stack:7.2.0-v10
     container_name: local-rag-redis
-    ports:
-      - "6379:6379"
-      - "8001:8001"
+    expose:
+      - "6379"
     volumes:
       # Map this to a TrueNAS dataset for your Vector database —
       # set REDIS_DATA_PATH in .env (copy .env.example)
       - ${REDIS_DATA_PATH:?Set REDIS_DATA_PATH in .env}:/data
-    command: redis-stack-server --appendonly yes
-    environment:
-      - REDIS_ARGS=--appendonly yes
+    command: redis-stack-server --appendonly yes --requirepass "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (e.g. openssl rand -hex 32)}"
     restart: unless-stopped
 
   backend:
@@ -30,9 +31,25 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (e.g. openssl rand -hex 32)}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (e.g. openssl rand -hex 32)}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:3000}
+      # Set TRUST_PROXY_HEADERS=true only when a trusted reverse proxy sets
+      # X-Forwarded-For (needed for correct per-IP rate limiting behind a proxy).
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-False}
+      # /docs + /redoc publish the full API surface unauthenticated -- leave
+      # on for local/homelab use, set to false for an internet-facing deploy
+      # that doesn't need public API docs.
+      - API_DOCS_ENABLED=${API_DOCS_ENABLED:-True}
+      # Auth rate limiting (Redis-backed, per client IP). See .env.example.
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-True}
+      - RATE_LIMIT_LOGIN_MAX=${RATE_LIMIT_LOGIN_MAX:-10}
+      - RATE_LIMIT_LOGIN_WINDOW=${RATE_LIMIT_LOGIN_WINDOW:-60}
+      - RATE_LIMIT_SIGNUP_MAX=${RATE_LIMIT_SIGNUP_MAX:-5}
+      - RATE_LIMIT_SIGNUP_WINDOW=${RATE_LIMIT_SIGNUP_WINDOW:-3600}
+      - RATE_LIMIT_RESET_MAX=${RATE_LIMIT_RESET_MAX:-5}
+      - RATE_LIMIT_RESET_WINDOW=${RATE_LIMIT_RESET_WINDOW:-3600}
       - SESSION_IDLE_TIMEOUT_SECONDS=${SESSION_IDLE_TIMEOUT_SECONDS:-60}
       # Billing / plan limits (INR) — Free/Pro/Max storage, AI-question quota,
       # saved-conversation cap, pricing, team size. See .env.example.

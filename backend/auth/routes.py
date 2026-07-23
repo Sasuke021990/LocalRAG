@@ -3,13 +3,16 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+import jwt
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
-from auth import email_service, google_oauth, passwords, store, tokens
-from auth.dependencies import require_current_user
+from admin import store as admin_store
+from auth import email_service, google_oauth, passwords, session_blacklist, store, tokens
+from auth.dependencies import _extract_token, require_current_user, require_session_user
 from auth.redis_client import redis_client
 from auth.schemas import (
+    AccountDeleteSchema,
     ChangePasswordSchema,
     GoogleTokenExchangeSchema,
     LoginRequest,
@@ -20,6 +23,7 @@ from auth.schemas import (
 )
 from utils import system_settings
 from utils.config import config
+from utils.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +60,7 @@ def _user_out(user: dict, token: str) -> AuthResponse:
     )
 
 
-@router.post("/signup", response_model=AuthResponse)
+@router.post("/signup", response_model=AuthResponse, dependencies=[Depends(rate_limit("signup"))])
 async def signup(body: SignupRequest, response: Response):
     if not system_settings.signups_enabled(redis_client):
         raise HTTPException(status_code=403, detail="Public signups are currently disabled")
@@ -75,7 +79,7 @@ async def signup(body: SignupRequest, response: Response):
     return _user_out(user, token)
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post("/login", response_model=AuthResponse, dependencies=[Depends(rate_limit("login"))])
 async def login(body: LoginRequest, response: Response):
     """``body.email`` accepts either an email address or a username."""
     user = store.get_user_by_identifier(redis_client, body.email)
@@ -87,8 +91,22 @@ async def login(body: LoginRequest, response: Response):
 
 
 @router.post("/logout")
-async def logout(response: Response):
-    """No auth required — logging out when already logged out is a safe no-op."""
+async def logout(request: Request, response: Response):
+    """
+    No auth required — logging out when already logged out is a safe no-op.
+
+    Revokes the presented token specifically (via its jti, see
+    auth.session_blacklist) rather than bumping token_version, so other
+    devices/sessions stay logged in. A missing/invalid/pre-jti token is
+    silently ignored — there's nothing to revoke.
+    """
+    token = _extract_token(request)
+    if token:
+        try:
+            payload = tokens.decode_session_token(token)
+            session_blacklist.blacklist(redis_client, payload.get("jti", ""), payload["exp"])
+        except jwt.InvalidTokenError:
+            pass
     response.delete_cookie(tokens.SESSION_COOKIE_NAME)
     return {"status": "logged_out"}
 
@@ -116,6 +134,36 @@ async def change_password(
     new_version = user["token_version"] + 1
     _set_session_cookie(response, user_id, new_version)
     return {"status": "password_updated"}
+
+
+@router.delete("/me")
+async def delete_own_account(
+    body: AccountDeleteSchema,
+    response: Response,
+    user_id: str = Depends(require_session_user),
+):
+    """
+    Permanently delete the signed-in user's own account and everything they
+    own -- documents, pools, conversations, API tokens, and webhooks (see
+    admin.store.delete_user_completely, the same hard-delete an admin uses).
+    This cannot be undone.
+
+    Session-only (an MCP/API token cannot reach this route) so a leaked
+    token can't wipe the account it belongs to. Password accounts must
+    re-confirm their current password even though the session is already
+    authenticated -- a defense against a hijacked/XSS'd session token
+    silently deleting the account. Google-only accounts (no password set)
+    skip that check.
+    """
+    user = store.get_user_by_id(redis_client, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user["password_hash"] and not passwords.verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Incorrect password")
+
+    admin_store.delete_user_completely(redis_client, user_id, data_dir=config.DATA_DIR)
+    response.delete_cookie(tokens.SESSION_COOKIE_NAME)
+    return {"status": "account_deleted"}
 
 
 @router.get("/me", response_model=UserOut)
@@ -194,7 +242,7 @@ async def google_token_exchange(body: GoogleTokenExchangeSchema):
 
 # ─── Password reset ─────────────────────────────────────────────────────────
 
-@router.post("/password-reset/request")
+@router.post("/password-reset/request", dependencies=[Depends(rate_limit("password_reset"))])
 async def password_reset_request(body: PasswordResetRequestSchema, background_tasks: BackgroundTasks):
     """
     Always returns 200 regardless of whether the email is registered --

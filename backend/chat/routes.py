@@ -16,7 +16,7 @@ from auth.dependencies import require_current_user
 from auth.redis_client import redis_client
 from chat import store as chat_store
 from chat.schemas import ConversationDetail, ConversationSummary, RenameRequest
-from retrieval import vector_index
+from retrieval import semantic_cache, vector_index
 
 logger = logging.getLogger(__name__)
 
@@ -71,4 +71,8 @@ async def rename_conversation(conversation_id: str, body: RenameRequest, user_id
 async def delete_conversation(conversation_id: str, user_id: str = Depends(require_current_user)):
     if not chat_store.delete_conversation(redis_client, user_id, conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
+    # Clear this user's cached answers so re-asking a question after deleting a
+    # conversation genuinely re-runs the LLM (a fresh start) instead of getting
+    # an instant cached reply that makes the old chat feel like it's still there.
+    semantic_cache.clear_user_cache(redis_client, user_id)
     return {"status": "deleted"}

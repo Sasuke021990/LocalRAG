@@ -13,6 +13,7 @@ no-content-leak test.
 Key namespaces owned by a user (used for counts + cascade delete):
     user:<uid>                     account record
     user_email_index:<email>       email -> uid
+    user_username_index:<username> username -> uid
     user_google_index:<sub>        google sub -> uid
     document:<uid>:*               document blobs
     chunk:<uid>:*                  RediSearch chunk hashes
@@ -22,6 +23,8 @@ Key namespaces owned by a user (used for counts + cascade delete):
     mcp_token_lookup:<hash>        token hash -> uid  (resolved via token meta)
     webhook:<uid>:*                webhook hashes
     webhooks:<uid>                 webhook id set
+    conversation:<uid>:*           conversation blobs (chat history)
+    conversation_index:<uid>       conversation recency zset
 """
 
 import logging
@@ -150,9 +153,12 @@ def delete_user_completely(redis_client, user_id: str, data_dir: str = "/app/dat
 
     # Reverse indices (need the values stored on the user record).
     email = raw.get("email", "")
+    username = raw.get("username", "")
     google_sub = raw.get("google_sub", "")
     if email:
         redis_client.delete(f"user_email_index:{email.lower()}")
+    if username:
+        redis_client.delete(f"user_username_index:{username.lower()}")
     if google_sub:
         redis_client.delete(f"user_google_index:{google_sub}")
 
@@ -171,6 +177,8 @@ def delete_user_completely(redis_client, user_id: str, data_dir: str = "/app/dat
         f"mcp_tokens:{user_id}",
         f"webhook:{user_id}:*",
         f"webhooks:{user_id}",
+        f"conversation:{user_id}:*",
+        f"conversation_index:{user_id}",
     ]
     for pattern in patterns:
         keys = redis_client.keys(pattern)

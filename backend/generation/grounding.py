@@ -170,6 +170,21 @@ def build_system_prompt(
     )
 
 
+def thinking_directive(thinking: bool) -> str:
+    """
+    Qwen3-family hybrid-thinking models accept a soft switch appended to the
+    *user* turn -- "/think" or "/no_think" -- that toggles their native
+    chain-of-thought for that turn, independent of anything in the system
+    prompt. This matters because ``build_system_prompt``'s ``thinking`` flag
+    only *asks* the model to reason step by step; a hybrid model can default
+    to thinking even when that instruction is absent, silently paying the
+    extra latency/token cost. Appending this directive is the belt to that
+    prompt's suspenders. On any model that doesn't recognize the convention
+    it's just inert trailing text.
+    """
+    return " /think" if thinking else " /no_think"
+
+
 def strip_trailing_refusal(answer: str) -> str:
     """
     Remove a trailing echo of the refusal sentence from an otherwise-real answer.

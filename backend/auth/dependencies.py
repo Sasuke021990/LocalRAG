@@ -15,7 +15,7 @@ Two dependencies are exposed:
 import jwt
 from fastapi import HTTPException, Request
 
-from auth import store, tokens
+from auth import session_blacklist, store, tokens
 from auth.redis_client import redis_client
 from integrations import mcp_tokens
 
@@ -34,6 +34,9 @@ def _user_from_session(token: str) -> str:
         payload = tokens.decode_session_token(token)
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    if session_blacklist.is_blacklisted(redis_client, payload.get("jti", "")):
+        raise HTTPException(status_code=401, detail="Session revoked")
 
     user = store.get_user_by_id(redis_client, payload["sub"])
     if user is None:

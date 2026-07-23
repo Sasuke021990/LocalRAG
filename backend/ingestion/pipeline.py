@@ -77,6 +77,7 @@ class DocumentIngestionPipeline:
                 host=redis_host,
                 port=redis_port,
                 db=redis_db,
+                password=config.REDIS_PASSWORD or None,
                 decode_responses=True,
             )
             self.redis_client.ping()

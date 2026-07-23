@@ -61,6 +61,14 @@ class ChangePasswordSchema(BaseModel):
     _check_password = field_validator("new_password")(_validate_password_length)
 
 
+class AccountDeleteSchema(BaseModel):
+    # Re-confirms intent (and, for password accounts, identity) even though
+    # the session is already authenticated -- a defense against a hijacked
+    # session token silently deleting the account. Left blank for Google-only
+    # accounts, which have no password to check.
+    password: str = ""
+
+
 class UserOut(BaseModel):
     user_id: str
     username: str = ""

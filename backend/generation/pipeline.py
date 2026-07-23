@@ -135,11 +135,15 @@ async def stream_answer(
         [s["content"] for s in sources], thinking=config.LLM_THINKING_ENABLED,
     )
     trimmed_history = grounding.trim_history(history)
+    # Suffix only the text sent to the model -- retrieval/rerank/cache/greeting
+    # above already ran against the clean `query`, and _persist_turn (caller)
+    # stores the original request text, never this.
+    model_query = query + grounding.thinking_directive(config.LLM_THINKING_ENABLED)
     splitter = grounding.ThinkingStreamSplitter()
     answer_parts: List[str] = []
     reasoning_parts: List[str] = []
 
-    async for token in llm.generate_stream(system_prompt, query, trimmed_history):
+    async for token in llm.generate_stream(system_prompt, model_query, trimmed_history):
         for phase, text in splitter.feed(token):
             if phase == "thinking":
                 reasoning_parts.append(text)

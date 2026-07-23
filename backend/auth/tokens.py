@@ -1,5 +1,6 @@
 """Session JWT creation/verification for Vaultly accounts."""
 
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -13,6 +14,10 @@ def create_session_token(user_id: str, token_version: int) -> str:
     payload = {
         "sub": user_id,
         "tv": token_version,
+        # Unique per-token id -- lets logout revoke *this* token specifically
+        # (auth.session_blacklist) without bumping token_version, which would
+        # invalidate every other device's session too.
+        "jti": uuid.uuid4().hex,
         "exp": datetime.now(timezone.utc) + timedelta(seconds=config.SESSION_COOKIE_MAX_AGE_SECONDS),
     }
     return jwt.encode(payload, config.JWT_SECRET, algorithm="HS256")

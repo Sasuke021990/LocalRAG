@@ -64,10 +64,14 @@ const grouped = computed(() => {
 const moveOpen = ref(false)
 const moving = ref(null)     // the document being moved
 const targetPool = ref('')
+// True while the PoolPicker has an unconfirmed new-pool name typed in — used
+// to disable Save so the click can't discard the pool the user is creating.
+const movePoolPending = ref(false)
 
 function openMove(doc) {
   moving.value = doc
   targetPool.value = doc.pool
+  movePoolPending.value = false
   moveOpen.value = true
 }
 
@@ -205,10 +209,11 @@ async function createPool() {
       <p class="text-sm text-ink-soft mb-4">
         Move <span class="font-semibold text-ink">{{ moving?.file_name }}</span> to a pool, or keep it where it is.
       </p>
-      <PoolPicker v-model="targetPool" :pools="pools" :allow-empty="false" @created="load" />
+      <PoolPicker v-model="targetPool" :pools="pools" :allow-empty="false" @created="load" @pending="movePoolPending = $event" />
+      <p v-if="movePoolPending" class="text-xs text-ink-muted mt-2">Finish creating the new pool (✓) or pick an existing one to continue.</p>
       <div class="flex gap-2 mt-6">
         <Button variant="secondary" block @click="moveOpen = false">Cancel</Button>
-        <Button block @click="confirmMove">Save</Button>
+        <Button block :disabled="movePoolPending" @click="confirmMove">Save</Button>
       </div>
     </Modal>
 

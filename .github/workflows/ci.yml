@@ -13,14 +13,20 @@ jobs:
         image: redis/redis-stack-server:7.2.0-v10
         ports:
           - 6379:6379
+        # Mirrors production (SECURITY.md H1: Redis always requires a
+        # password) so CI exercises the same auth path the app uses for
+        # real, rather than testing against an unauthenticated Redis.
+        env:
+          REDIS_ARGS: "--requirepass ci-test-redis-password"
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "redis-cli -a ci-test-redis-password ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
       REDIS_HOST: localhost
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ci-test-redis-password
       JWT_SECRET: ci-test-secret-not-for-production
     steps:
       - uses: actions/checkout@v4

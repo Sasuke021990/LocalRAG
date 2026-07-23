@@ -35,6 +35,13 @@ from retrieval import vector_index as vector_index_module  # noqa: E402
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+# Matches auth.redis_client / ingestion.pipeline / retrieval.*'s own client
+# construction -- once Redis runs with --requirepass (see SECURITY.md H1),
+# these fixtures need the same credential or every DB-touching test silently
+# skips via the `except Exception: pytest.skip(...)` below (NOAUTH looks
+# identical to "no Redis reachable" from here). Empty/unset is fine for a
+# plain local Redis with no password.
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or None
 
 
 def _assert_safe_to_flush(client) -> None:
@@ -102,6 +109,18 @@ class FakeSentenceTransformer:
 
 
 @pytest.fixture(autouse=True)
+def disable_rate_limiting(monkeypatch):
+    """
+    Turn the auth rate limiter off for the general suite — many tests make
+    repeated signup/login calls from the same TestClient IP and would
+    otherwise trip the 429. ``test_rate_limit.py`` re-enables it explicitly to
+    exercise the limiter itself.
+    """
+    from utils.config import config
+    monkeypatch.setattr(config, "RATE_LIMIT_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def patched_embedding_models(monkeypatch):
     """Replace SentenceTransformer with the deterministic fake everywhere it's imported."""
     import ingestion.pipeline as pipeline_module
@@ -121,7 +140,7 @@ def redis_client():
     run against anything that looks like it might be a real deployment's
     database, regardless of what REDIS_HOST/REDIS_PORT happen to resolve to.
     """
-    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, password=REDIS_PASSWORD, decode_responses=True)
     try:
         client.ping()
     except Exception as exc:
@@ -150,7 +169,7 @@ def redisearch_vector_available():
     from redis.commands.search.field import VectorField
     from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 
-    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+    client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, password=REDIS_PASSWORD, decode_responses=True)
     try:
         client.ping()
     except Exception:

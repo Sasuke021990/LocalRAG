@@ -50,7 +50,12 @@ def exchange_code_for_userinfo(code: str) -> dict:
         timeout=10,
     )
     if token_resp.status_code != 200:
-        logger.error(f"Google token exchange failed: {token_resp.status_code} {token_resp.text}")
+        # Status only at error level -- the response body is logged at debug
+        # only (normally disabled in production), since Google's error
+        # payload is attacker-influenced (via the `code` we forwarded) and
+        # not something that belongs in aggregated logs by default.
+        logger.error(f"Google token exchange failed: HTTP {token_resp.status_code}")
+        logger.debug(f"Google token exchange error body: {token_resp.text}")
         raise HTTPException(status_code=400, detail="Google OAuth exchange failed")
 
     access_token = token_resp.json().get("access_token")
@@ -63,7 +68,8 @@ def exchange_code_for_userinfo(code: str) -> dict:
         timeout=10,
     )
     if userinfo_resp.status_code != 200:
-        logger.error(f"Google userinfo fetch failed: {userinfo_resp.status_code} {userinfo_resp.text}")
+        logger.error(f"Google userinfo fetch failed: HTTP {userinfo_resp.status_code}")
+        logger.debug(f"Google userinfo error body: {userinfo_resp.text}")
         raise HTTPException(status_code=400, detail="Failed to fetch Google userinfo")
 
     data = userinfo_resp.json()

@@ -22,6 +22,9 @@ const dragOver = ref(false)
 const uploading = ref(false)
 const progressPct = ref(0)
 const progressMessage = ref('')
+// True while the PoolPicker has an unconfirmed new-pool name typed in — blocks
+// upload so the click can't discard the pool the user is mid-creating.
+const poolPending = ref(false)
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff', '.tif']
 const isImage = computed(() => {
@@ -109,7 +112,8 @@ function submit() {
 
     <div>
       <p class="text-sm font-medium text-ink-soft mb-1.5">Pool</p>
-      <PoolPicker v-model="pool" :pools="pools" @created="$emit('pool-created', $event)" />
+      <PoolPicker v-model="pool" :pools="pools" @created="$emit('pool-created', $event)" @pending="poolPending = $event" />
+      <p v-if="poolPending" class="text-xs text-ink-muted mt-1.5">Finish creating the new pool (✓) or pick an existing one to upload.</p>
     </div>
 
     <!-- Chunking is an implementation detail — only admins get to tune it. -->
@@ -137,7 +141,7 @@ function submit() {
       </div>
     </div>
 
-    <Button :disabled="!file || uploading" block @click="submit">
+    <Button :disabled="!file || uploading || poolPending" block @click="submit">
       <Loader2 v-if="uploading" class="w-4 h-4 animate-spin" />
       <UploadCloud v-else class="w-4 h-4" />
       {{ uploading ? 'Uploading…' : 'Upload & embed' }}
