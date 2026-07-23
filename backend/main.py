@@ -329,6 +329,8 @@ async def delete_document(
             raise HTTPException(status_code=404, detail="Document not found")
         quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed_bytes)
         hybrid_search.invalidate_bm25(user_id)
+        # Drop cached answers — they may cite the now-deleted document.
+        semantic_cache.clear_cache(user_id)
         background_tasks.add_task(
             webhooks.dispatch_event,
             auth_redis_client,
@@ -362,6 +364,8 @@ async def move_document(
     if meta is None:
         raise HTTPException(status_code=404, detail="Document not found in the given pool")
     hybrid_search.invalidate_bm25(user_id)
+    # A moved doc changes which pool-scoped searches surface it — drop cached answers.
+    semantic_cache.clear_cache(user_id)
     return {"status": "moved", "document": meta}
 
 
@@ -467,8 +471,12 @@ async def upload_document(
                         {"file_name": file.filename, "pool": safe_pool, "reason": "quota_exceeded"},
                     )
                 else:
-                    # New/changed document set for this user — drop the stale BM25 cache.
+                    # New/changed document set for this user — drop the stale
+                    # BM25 cache and any cached answers (they were computed
+                    # before this document existed, e.g. a "key points" query
+                    # that must now also consider the newly-added file).
                     hybrid_search.invalidate_bm25(user_id)
+                    semantic_cache.clear_cache(user_id)
                     upload_progress.set_progress(
                         auth_redis_client, task_id, user_id, 100,
                         "Done — ready to search", status="complete",

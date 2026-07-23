@@ -5,7 +5,7 @@ import time
 import numpy as np
 import pytest
 
-from retrieval.semantic_cache import SemanticCache
+from retrieval.semantic_cache import SemanticCache, clear_user_cache
 from tests.conftest import REDIS_HOST, REDIS_PORT
 
 USER_A = "user-aaa"
@@ -80,6 +80,52 @@ class TestExactMatchCache:
 
         assert cache.get_cached_result(USER_A, "q1") is None
         assert cache.get_cached_result(USER_B, "q1") is not None
+
+    def test_clear_cache_also_clears_pool_scoped_entries(self, cache):
+        """
+        pipeline.stream_answer scopes pool-restricted queries under
+        f"{user_id}::pool::{pool}" (see generation/pipeline.py) rather than
+        the bare user_id. A plain clear_cache(user_id) -- called after a
+        document upload/delete/move -- must still catch those, or a stale
+        answer for pool-scoped questions (e.g. "key points" run against a
+        specific pool) would survive the very document change meant to
+        invalidate it.
+        """
+        pool_scope_docs = f"{USER_A}::pool::Docs"
+        pool_scope_legal = f"{USER_A}::pool::Legal"
+        cache.set_cached_result(USER_A, "unscoped q", [{"answer": "a0", "sources": []}])
+        cache.set_cached_result(pool_scope_docs, "key points", [{"answer": "from Docs pool", "sources": []}])
+        cache.set_cached_result(pool_scope_legal, "key points", [{"answer": "from Legal pool", "sources": []}])
+        cache.set_cached_result(USER_B, "key points", [{"answer": "other user", "sources": []}])
+
+        assert cache.clear_cache(USER_A) is True
+
+        assert cache.get_cached_result(USER_A, "unscoped q") is None
+        assert cache.get_cached_result(pool_scope_docs, "key points") is None
+        assert cache.get_cached_result(pool_scope_legal, "key points") is None
+        # A different user's cache (even for the same query text) is untouched.
+        assert cache.get_cached_result(USER_B, "key points") is not None
+
+
+class TestClearUserCacheFunction:
+    """clear_user_cache is a module-level function (no SemanticCache/embedding
+    model needed) -- used by routes that only need to invalidate, e.g.
+    chat.routes.delete_conversation, without paying for a full cache instance."""
+
+    def test_clears_all_of_one_users_entries_across_pool_scopes(self, cache, redis_client):
+        cache.set_cached_result(USER_A, "q1", [{"answer": "a1", "sources": []}])
+        cache.set_cached_result(f"{USER_A}::pool::Docs", "q2", [{"answer": "a2", "sources": []}])
+        cache.set_cached_result(USER_B, "q1", [{"answer": "b1", "sources": []}])
+
+        removed = clear_user_cache(redis_client, USER_A)
+
+        assert removed >= 2
+        assert cache.get_cached_result(USER_A, "q1") is None
+        assert cache.get_cached_result(f"{USER_A}::pool::Docs", "q2") is None
+        assert cache.get_cached_result(USER_B, "q1") is not None
+
+    def test_returns_zero_when_nothing_to_clear(self, redis_client):
+        assert clear_user_cache(redis_client, "user-with-nothing-cached") == 0
 
 
 class TestSemanticSimilarityCache:

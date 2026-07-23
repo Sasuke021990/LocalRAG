@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import * as documentsApi from '../api/documents.js'
 import { useToastStore } from '../stores/toast.js'
 import { Plus, Check } from 'lucide-vue-next'
@@ -9,11 +9,19 @@ const props = defineProps({
   modelValue: { type: String, default: '' },
   allowEmpty: { type: Boolean, default: true },
 })
-const emit = defineEmits(['update:modelValue', 'created'])
+// `pending` is true while the inline "New pool" field is open with an
+// unconfirmed name typed in — the parent uses it to disable its own
+// action button (Save / Upload) so a click can't silently discard the
+// name the user was in the middle of creating.
+const emit = defineEmits(['update:modelValue', 'created', 'pending'])
 
 const toast = useToastStore()
 const creating = ref(false)
 const newName = ref('')
+
+watch([creating, newName], () => {
+  emit('pending', creating.value && newName.value.trim().length > 0)
+})
 
 async function create() {
   const name = newName.value.trim()

@@ -25,6 +25,32 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CACHE_PREFIX = "semantic_cache:"
+
+
+def clear_user_cache(redis_client, user_id: str, cache_prefix: str = DEFAULT_CACHE_PREFIX) -> int:
+    """
+    Delete every semantic-cache entry a user owns, across *all* pool scopes,
+    using only the Redis keyspace — no embedding model or SemanticCache
+    instance required. Returns the number of keys removed.
+
+    Keys are ``<prefix><scope>:<hash>`` where ``scope`` is either the bare
+    ``user_id`` (unscoped queries) or ``<user_id>::pool::<pool>`` (pool-scoped
+    queries; see pipeline.stream_answer). Both share the ``<prefix><user_id>:``
+    prefix, so a single glob clears the lot — and since user_ids are fixed-
+    length uuid hex, one user's prefix can never collide with another's.
+
+    Call this whenever a user's underlying data changes (a document is
+    uploaded / deleted / moved, or a conversation is deleted) so the cache
+    can't keep serving an answer that no longer reflects their documents.
+    """
+    pattern = f"{cache_prefix}{user_id}:*"
+    keys = redis_client.keys(pattern)
+    if keys:
+        redis_client.delete(*keys)
+    return len(keys)
+
+
 @dataclass
 class CachedResult:
     """Data class to represent a cached search result."""
@@ -291,15 +317,11 @@ class SemanticCache:
             return False
 
         try:
-            pattern = f"{self.cache_prefix}{user_id}:*"
-            keys = self.redis_client.keys(pattern)
-
-            if keys:
-                self.redis_client.delete(*keys)
-                logger.info(f"Cleared {len(keys)} entries from semantic cache for user {user_id}")
+            removed = clear_user_cache(self.redis_client, user_id, self.cache_prefix)
+            if removed:
+                logger.info(f"Cleared {removed} entries from semantic cache for user {user_id}")
             else:
                 logger.debug(f"No entries found to clear from semantic cache for user {user_id}")
-
             return True
 
         except Exception as e:
