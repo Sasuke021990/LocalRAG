@@ -5,32 +5,8 @@
 **Status key**: `[x]` done & verified · `[ ]` not started · `[~]` partially done (see note)
 
 > **Current priority (2026-07-24): mobile-first launch.** Web/backend work (§1's new features, §3 reliability items) is on hold unless it's a shared-backend blocker for mobile. Everything mobile-launch-related should be pulled to the top of this file as it's scoped.
-
-## 1a-bis. Mobile parity gaps found during manual device testing (2026-07-25) — **FIXED**
-
-Found while testing the Knowledge Graph on a real device (Expo Go): the mobile app was missing several web features around pool management and had two bugs.
-
-- [x] **Bug: Graph tab showed "upgrade to Pro" after already upgrading.** Root cause: bottom-tab screens stay mounted, so the Graph tab kept its stale cached Free-tier subscription from before the Billing-tab upgrade. Fixed with `useFocusEffect` refetch on the Graph screen + `queryClient.invalidateQueries(['subscription'])` on plan change in `BillingScreen.tsx`.
-- [x] **Bug: pool-chip row on the Graph screen stretched into a giant pill**, stealing the graph's vertical space. A horizontal `ScrollView` in a flex column grows to fill available height by default — pinned it to content height (`flexGrow: 0`).
-- [x] **Knowledge Graph UI: label overlap on dense graphs.** Added a white halo behind every label (legible even overlapping), truncation for long labels, and tap-to-declutter (focusing a node hides every non-neighbor label) — on both web and mobile.
-- [x] **Mobile pool management (was entirely missing — upload always went to "General", no move/create/delete-pool anywhere):**
-  - Pool picker at upload time (existing pool or create new) — `PoolPickerSheet.tsx` (new, mirrors web's `PoolPicker.vue`)
-  - "Needs a pool" strip with a "Choose a pool" action per unassigned document
-  - Move a document to another pool (`FolderInput` icon on `DocumentRow`, opt-in via a new `onMove` prop)
-  - Dedicated "New pool" button + create flow
-  - Delete an empty pool (trash icon on empty pool groups, mirrors web)
-  - Added `deletePool` to `mobile/src/api/documents.ts` (existed on web, was missing on mobile)
-- [x] **HomeScreen stat cards now tappable** → navigate to the Knowledge tab (mirrors web `DashboardPage.vue`'s cards linking to `/knowledge-base`).
-- [x] **Knowledge Graph: "Highlight concept" picker** (mobile had tap-to-focus only, no dropdown-equivalent) — a sheet listing every concept, mirrors web's `<select>`.
-- [x] **Knowledge Graph: pinch-to-zoom + one-finger pan** on the mobile WebView graph (web already had scroll/pinch zoom via `d3.zoom()`; mobile was drag-only). Implemented in `graphHtml.ts`'s vanilla-JS force sim with a `#viewport` transform group.
-- Verified: `tsc --noEmit` clean throughout, full `expo export` bundle succeeds after every change. **Not yet re-tested on-device** after this batch — was mid-session when the fixes landed; needs a fresh on-device pass.
-
-## 1a-ter. Data-correctness bug + graph UI polish, found on the second device pass (2026-07-25) — **FIXED**
-
-- [x] **Bug (data correctness): a document moved to a new pool during background graph extraction got its graph attached to the OLD pool.** Root cause: `main.py`'s `_process()` captures `safe_pool` in its closure at upload time; graph extraction is a slow LLM call (10-30s) that can finish *after* the user has already moved the document elsewhere, and the merge blindly used the stale captured pool. Fixed with `ingestion_pipeline.document_still_at(user_id, pool, file_name)` — a guard checked immediately before `graph_store.merge_document()` that skips the merge entirely if the doc is no longer at the pool it was uploaded to (same "skip rather than guess" behavior `update_document_summary` already had for free, since it does a Redis exists-check as part of its read-modify-write). 3 new tests; full suite 458 passed. Live-verified: found and purged 11 orphaned nodes / 10 orphaned edges left in a real account's General-pool graph by this exact bug before the fix landed.
-- [x] **Graph UI: nodes clustered too tightly, labels still crossed despite the halo.** Pure inverse-square repulsion wasn't enough on dense graphs. Added direct position-based collision resolution (mobile's vanilla-JS force sim) and bumped `d3.forceCollide()`'s radius 28→46 (web) — both now enforce a real minimum gap between nodes regardless of repulsion/charge settings.
-- [x] **Graph UI: no way to reset the view after panning/zooming.** Added a floating "Recenter" button (bottom-right of the graph canvas) on both platforms — web resets the `d3.zoom` transform to identity; mobile remounts the WebView (same trick already used for repulsion/pool/highlight changes, since the vanilla-JS sim has no cross-render state to reset otherwise).
-- Verified: full backend suite (458 passed), web Vite build clean, mobile `tsc` clean + full `expo export` bundle succeeds. **Still pending a fresh on-device re-test** to confirm the fixes read well in practice.
+>
+> **Housekeeping reminder**: `mobile/app.json`'s `apiBaseUrl` is currently pointed at a local LAN IP (`http://192.168.1.6:8000`) for live device testing against the dev Docker backend, and is **deliberately left uncommitted** so the in-progress test session isn't broken by a revert. **Must be reverted to `https://api.vaultly.app` before it's committed or any build is shipped.**
 
 ---
 
@@ -41,11 +17,12 @@ Condensed so this doc is self-orienting without re-reading the whole history:
 - **Auth**: username+email login, username uniqueness, idle-session timeout (non-dismissible-by-accident popup), self-service account deletion, JWT session revocation on logout (Redis blacklist), Google OAuth.
 - **Chat**: pool-selection popup, conversational memory, server-side conversation persistence (list/rename/delete/resume), per-plan conversation caps, Markdown rendering, source-document-name display (not full passage dumps), admin-only timing indicator, Qwen3 `/think` `/no_think` hybrid-thinking wiring.
 - **Billing**: Free/Pro/Max/Customize tiers defined and enforced (storage, AI-question quota, conversation caps, webhooks gate, priority-processing flag), contact-lead capture, mobile `BillingScreen.tsx` matches backend plans (no more stale USD data).
-- **Knowledge Base**: pool creation flow, document upload with real per-phase progress + image/OCR support, move/delete documents.
-- **Mobile**: full parity pass (auth, chat/pools/markdown/sources, upload progress, admin panel) + Expo SDK 51→54 upgrade.
+- **Knowledge Base**: pool creation flow, document upload with real per-phase progress + image/OCR support, per-document AI summaries (§1d), move/delete documents — **mobile now has full pool-management parity with web** (upload-time pool picker, assign/move/create/delete pool — see §1a).
+- **Knowledge Graph** (§1a): per-pool concept graph built by a background LLM pass, web (D3.js) + mobile (WebView) UIs, Pro+ gated, live-tested on device with bugs found and fixed.
+- **Mobile**: full parity pass (auth, chat/pools/markdown/sources, upload progress, admin panel, Knowledge Base pool management, Knowledge Graph) + Expo SDK 51→54 upgrade. Still missing: an Integrations screen (tokens/webhooks — see §1e, deferred).
 - **Admin panel**: web + newly-built mobile version — stats, settings, user management (quota/admin-toggle/active-toggle/delete).
 - **Security**: full 5-check audit (`SECURITY.md`) — both Highs fixed (Redis auth+lockdown, auth rate limiting), all 7 Lows fixed (Swagger gating, reset-token TTL, logout revocation, self-service deletion, no more logged admin passwords, quieter OAuth error logs, untracked `mcp/node_modules`), and all 6 Mediums fixed (Secure cookie, webhook SSRF guard, upload path-traversal sanitization, no more leaked exception text, HTTP security headers, OAuth state CSRF check — see §4 for verification detail).
-- **Defects**: 4 reported bugs fixed and verified live — stale semantic cache after document delete/upload, stale cache after conversation delete, pool-creation Save button race (see `defect.md`).
+- **Defects**: 4 reported bugs fixed and verified live — stale semantic cache after document delete/upload, stale cache after conversation delete, pool-creation Save button race (see `defect.md`). Plus a 5th found and fixed this session: graph data attaching to the wrong pool on a fast pool-move (§1a).
 
 ---
 
@@ -53,17 +30,28 @@ Condensed so this doc is self-orienting without re-reading the whole history:
 
 Specs below are locked from planning discussion; nothing in this section has any code written yet.
 
-### 1a. Interactive Knowledge Graph — **FIXED**
+### 1a. Interactive Knowledge Graph — **FIXED, live-tested on device (2026-07-25)**
+
+Backend, web, and mobile all shipped, then put through two rounds of real on-device testing (Expo Go against the dev Docker backend) that found and fixed a genuine data-correctness bug plus several mobile parity gaps and UI issues.
+
+**Core feature:**
 - [x] NER/topic extraction: **LLM-based**, decoupled from the upload-blocking path — `generation/pipeline.py::extract_graph_elements()` (drains `generate_stream`, tolerant JSON parse) wired into `main.py` `_process()`'s background pass right after the summary step, own try/except, `run_coroutine_threadsafe` onto the request loop.
 - [x] Graph storage in Redis: `knowledge_graph/store.py` — nodes + edges, each with a source-document list; concepts dedup across documents by slug. Keys mirror the webhooks SET+per-item convention.
-- [x] **Delete handling (locked "correct" version)**: `store.remove_document()` strips a doc from every element's source list and deletes any left empty; shared elements survive. Wired into `delete_document` and the cross-pool branch of `move_document`. An invariant (edge endpoints always superset the edge's sources) + a dangling-edge skip in `get_pool_graph` guarantee no stranded edges. Verified live: deleting the only doc emptied the graph.
+- [x] **Delete handling (locked "correct" version)**: `store.remove_document()` strips a doc from every element's source list and deletes any left empty; shared elements survive. Wired into `delete_document` and the cross-pool branch of `move_document`. An invariant (edge endpoints always superset the edge's sources) + a dangling-edge skip in `get_pool_graph` guarantee no stranded edges.
 - [x] **Backfill: none** — extraction only runs on new uploads; the endpoint returns an empty graph for pools with only pre-feature documents.
-- [x] **Platform: web + mobile.** Web: `KnowledgeGraphPage.vue` (real D3.js force graph). Mobile: `KnowledgeGraphScreen.tsx` embeds a WebView. *Deviation from blueprint:* the mobile WebView renders a **self-contained vanilla-JS force graph** (`components/graphHtml.ts`) rather than inlining the 270 KB D3 bundle into an HTML string — same force-directed UX (drag, tap-to-focus, repulsion presets), no external fetch, works offline. Noted intentionally.
+- [x] **Platform: web + mobile.** Web: `KnowledgeGraphPage.vue` (real D3.js force graph). Mobile: `KnowledgeGraphScreen.tsx` embeds a WebView. *Deviation from blueprint:* the mobile WebView renders a **self-contained vanilla-JS force graph** (`components/graphHtml.ts`) rather than inlining the 270 KB D3 bundle into an HTML string — same force-directed UX, no external fetch, works offline. Noted intentionally.
 - [x] New API: `GET /pools/{pool}/graph` → `{nodes, edges}` (gated).
-- [x] Web UI: D3 force-directed graph with **"Highlight concept" selector** and **"Node repulsion force" slider** (live-updates the charge force), drag/zoom/click-to-focus, per the mockups.
 - [x] **Plan gating**: `knowledge_graph` feature flag (Free False, Pro/Max/Customize True). Endpoint 403s on Free; web + mobile both show a lock/upsell card with a "See plans"/"Upgrade" CTA instead of the graph.
-- [x] 35 backend tests (store dedup/cascade/dangling-edge, JSON-parse robustness, extractor, plan flag). Full suite 455 passed. Mobile: `tsc` clean + full `expo export` bundle succeeded. Web: Vite build clean (d3 bundled). Backend live-verified end-to-end (Free→403, Pro→200 with a real 10-node/5-edge extraction, delete emptied the graph).
-- [ ] **Not yet visually verified in-browser / on-device** — browser tool unavailable this session; no device/simulator run. Do a real visual pass (web graph interactions + mobile WebView render) before calling the UI fully done.
+
+**Found + fixed during on-device testing:**
+- [x] **Data-correctness bug**: a document moved to a new pool *while* background graph extraction was still running (a 10-30s LLM call) got its graph attached to the OLD pool — `_process()` captured the upload-time pool in a closure and the late-finishing extraction blindly merged into that stale value. Fixed with `ingestion_pipeline.document_still_at()`, a guard checked immediately before the merge that skips it if the doc moved elsewhere in the meantime (mirrors the safe no-op `update_document_summary` already had). Found and purged 11 orphaned nodes / 10 orphaned edges this bug had left in a real account.
+- [x] **Mobile subscription-cache bug**: the Graph tab kept showing "upgrade to Pro" after the user had already upgraded on the Billing tab, because bottom-tab screens stay mounted and cache the old plan. Fixed with a focus-triggered refetch + explicit cache invalidation on plan change.
+- [x] **Mobile layout bug**: the pool-chip row stretched into a giant pill, stealing the graph's vertical space (a horizontal `ScrollView` in a flex column grows to fill height by default in RN). Pinned to content height.
+- [x] **Graph UI, both platforms**: white halo behind labels + truncation + tap-to-declutter (dense graphs were unreadable); real minimum-distance node collision (charge/repulsion alone let nodes cluster too close); a floating "Recenter" button to reset pan/zoom; a "Highlight concept" picker on mobile (was tap-only); pinch-to-zoom + one-finger pan on mobile's WebView graph.
+- [x] **Mobile pool management** (was entirely missing before this pass — upload always went to "General", no way to move/create/delete a pool): pool picker at upload time, "needs a pool" assignment strip, move-to-pool per document, dedicated "New pool" flow, delete-empty-pool. New shared `PoolPickerSheet.tsx` component; added the missing `deletePool` API call (existed on web, not on mobile).
+- [x] **Mobile HomeScreen**: stat cards now tappable → Knowledge tab (mirrors web).
+- [x] 458 backend tests total (35 for the graph store/extraction/gating + 3 for the pool-move race guard), full web Vite build clean, mobile `tsc` clean + full `expo export` bundle succeeds after every change.
+- [ ] **The final round of fixes (recenter button, collision spacing) has not yet been re-verified on-device** — was mid-session when they landed. Confirm on next device pass.
 
 ### 1b. Podcast Mode
 - [ ] Summarizer prompt (new system prompt variant in `grounding.py`, reuses existing `generation/llm.py` pipeline)
@@ -86,7 +74,8 @@ Specs below are locked from planning discussion; nothing in this section has any
 - [x] **Timing**: generated **after** ingestion is already marked complete, inside `main.py`'s `_process()` background task — wrapped in its own try/except so a slow/failed LLM call never retroactively fails an otherwise-successful upload. Runs via `run_coroutine_threadsafe` back onto the request's own event loop (not a second `asyncio.run()` loop in the worker thread) — needed because the embedded-LLM backend's `asyncio.Lock` binds to whichever loop first acquires it.
 - [x] Web: `DocumentCard.vue` renders `document.summary` (line-clamped). Mobile: `DocumentRow.tsx` renders `doc.summary`, `Doc` interface updated.
 - [x] 14 new tests (`test_grounding.py`, `test_ai_pipeline.py`, `test_pipeline.py`) + full suite (434 passed) + live end-to-end verification against a rebuilt Docker stack: uploaded a real refund-policy .txt, confirmed an accurate 3-sentence summary appeared in `GET /documents` ~20s after upload, no errors in logs.
-- [ ] **Not yet visually verified in-browser** — the in-app browser tool was unavailable for this whole session; verified via direct API responses and manual template review instead. Do a real visual pass next time the browser tool is back.
+- [x] **Mobile: visually confirmed on a real device** during the Knowledge Graph testing pass (2026-07-25) — summaries render correctly under each document row in the Knowledge Base list.
+- [ ] **Web: still not visually verified in-browser** — the in-app browser tool was unavailable all session. Do a real visual pass next time it's back.
 
 ### 1e. MCP/API token template section — **FIXED (web)**
 - [x] **Gap found and fixed**: the curl/MCP examples only existed inside the show-once token-reveal modal — closing it lost them entirely, unlike `WebhookManager.vue`'s always-available collapsible template section. Added a matching persistent "API / MCP setup template" section to `TokenManager.vue` using a `YOUR_TOKEN` placeholder, so the format is always there to reference even without a live token in hand.
