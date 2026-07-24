@@ -2,18 +2,25 @@ import React, { useState } from 'react'
 import { View, Text, StyleSheet, Pressable, Alert } from 'react-native'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as DocumentPicker from 'expo-document-picker'
-import { Trash2, UploadCloud, Image as ImageIcon } from 'lucide-react-native'
+import { Trash2, UploadCloud, Image as ImageIcon, Plus, ChevronDown, AlertCircle } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import DocumentRow from '../components/DocumentRow'
+import PoolPickerSheet from '../components/PoolPickerSheet'
 import {
-  fetchDocuments, fetchPools, uploadWithProgress, deleteDocument,
+  fetchDocuments, fetchPools, uploadWithProgress, deleteDocument, moveDocument, deletePool,
   IMAGE_MIME_TYPES, DOCUMENT_MIME_TYPES, type Doc,
 } from '../api/documents'
 import { useAuthStore } from '../stores/authStore'
 import { colors, fonts, radius } from '../theme/tokens'
+
+// What the pool-picker sheet is currently open for -- one shared sheet
+// instance handles upload destination, move, "needs a pool" assignment, and
+// dedicated pool creation (mirrors web's single PoolPicker.vue reused across
+// the upload form and the move modal).
+type PickerTarget = 'upload' | 'newpool' | { doc: Doc } | null
 
 export default function KnowledgeScreen() {
   const qc = useQueryClient()
@@ -25,6 +32,8 @@ export default function KnowledgeScreen() {
   const [isImage, setIsImage] = useState(false)
   const [progressPct, setProgressPct] = useState(0)
   const [progressMessage, setProgressMessage] = useState('')
+  const [uploadPool, setUploadPool] = useState('')
+  const [picker, setPicker] = useState<PickerTarget>(null)
 
   async function refresh() {
     await Promise.all([qc.invalidateQueries({ queryKey: ['documents'] }), qc.invalidateQueries({ queryKey: ['pools'] })])
@@ -43,11 +52,12 @@ export default function KnowledgeScreen() {
     setProgressPct(0)
     setProgressMessage('Uploading…')
     try {
-      await uploadWithProgress({ uri: f.uri, name: f.name, mimeType: f.mimeType }, '', {
+      await uploadWithProgress({ uri: f.uri, name: f.name, mimeType: f.mimeType }, uploadPool, {
         onProgress: (p) => { setProgressPct(p.progress); setProgressMessage(p.message) },
         onDone: (p) => { setProgressPct(p.progress); setProgressMessage(p.message) },
         onError: () => {},
       })
+      setUploadPool('')
       refresh()
     } catch (e: any) {
       Alert.alert('Upload failed', e.message || 'Please try again.')
@@ -63,13 +73,50 @@ export default function KnowledgeScreen() {
     ])
   }
 
+  function confirmDeletePool(name: string) {
+    Alert.alert('Delete pool?', `"${name}" will be removed. It must already be empty.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => {
+          try { await deletePool(name); refresh() }
+          catch (e: any) { Alert.alert('Could not delete pool', e?.message ?? 'Please try again.') }
+        },
+      },
+    ])
+  }
+
+  async function movePickedTo(doc: Doc, newPool: string) {
+    setPicker(null)
+    if (!newPool || (newPool === doc.pool && doc.pool_assigned !== false)) return
+    try {
+      await moveDocument(doc.file_name, doc.pool, newPool || 'General')
+      refresh()
+    } catch (e: any) {
+      Alert.alert('Could not move document', e?.message ?? 'Please try again.')
+    }
+  }
+
   const docs = docsQ.data?.documents ?? []
+  const pools = poolsQ.data?.pools ?? []
+  const unassigned = docs.filter((d) => d.pool_assigned === false)
+
+  // Seed every known pool (so an empty one still renders its own card),
+  // then bucket documents into them -- mirrors web's KnowledgeBasePage.vue.
   const grouped: Record<string, Doc[]> = {}
+  for (const p of pools) grouped[p.name] = []
   for (const d of docs) (grouped[d.pool] ||= []).push(d)
+  const groupedEntries = Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0]))
 
   return (
     <Screen>
-      <Text style={styles.title}>Knowledge Base</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Knowledge Base</Text>
+        <Pressable style={styles.newPoolBtn} onPress={() => setPicker('newpool')}>
+          <Plus color={colors.indigo} size={16} />
+          <Text style={styles.newPoolBtnText}>New pool</Text>
+        </Pressable>
+      </View>
 
       <Card style={{ alignItems: 'center', gap: 10 }}>
         <View style={styles.uploadChip}>
@@ -78,6 +125,15 @@ export default function KnowledgeScreen() {
             : <UploadCloud color={colors.indigo} size={26} />}
         </View>
         <Text style={styles.uploadHint}>PDF, DOCX, TXT, CSV, MD, HTML, JSON, XML, PNG, JPG, WEBP, GIF, BMP, TIFF</Text>
+
+        <Pressable style={styles.poolRow} onPress={() => setPicker('upload')} disabled={uploading}>
+          <Text style={styles.poolRowLabel}>Pool</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={styles.poolRowValue}>{uploadPool || 'General (default)'}</Text>
+            <ChevronDown color={colors.inkMuted} size={14} />
+          </View>
+        </Pressable>
+
         {uploading ? (
           <View style={{ alignSelf: 'stretch', gap: 6 }}>
             <View style={styles.progressRow}>
@@ -93,32 +149,102 @@ export default function KnowledgeScreen() {
         )}
       </Card>
 
+      {unassigned.length > 0 && (
+        <Card style={styles.unassignedCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <AlertCircle color={colors.amber} size={18} />
+            <Text style={styles.unassignedTitle}>
+              {unassigned.length} document{unassigned.length > 1 ? 's need' : ' needs'} a pool
+            </Text>
+          </View>
+          {unassigned.map((d) => (
+            <View key={d.key} style={styles.unassignedRow}>
+              <Text style={styles.unassignedName} numberOfLines={1}>{d.file_name}</Text>
+              <Pressable style={styles.chooseBtn} onPress={() => setPicker({ doc: d })}>
+                <Text style={styles.chooseBtnText}>Choose a pool</Text>
+              </Pressable>
+            </View>
+          ))}
+        </Card>
+      )}
+
       {docs.length === 0 ? (
         <Card><Text style={styles.empty}>No documents yet. Upload your first above.</Text></Card>
       ) : (
-        Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0])).map(([pool, list]) => (
+        groupedEntries.map(([pool, list]) => (
           <Card key={pool}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <Text style={styles.pool}>{pool}</Text>
-              <Badge label={String(list.length)} color="indigo" />
-            </View>
-            {list.map((d) => (
-              <View key={d.key} style={styles.rowWrap}>
-                <View style={{ flex: 1 }}><DocumentRow doc={d} /></View>
-                <Pressable onPress={() => confirmDelete(d)} hitSlop={10}><Trash2 color={colors.inkMuted} size={18} /></Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={styles.pool}>{pool}</Text>
+                <Badge label={String(list.length)} color="indigo" />
               </View>
-            ))}
+              {list.length === 0 && pool !== 'General' ? (
+                <Pressable onPress={() => confirmDeletePool(pool)} hitSlop={10}>
+                  <Trash2 color={colors.inkMuted} size={16} />
+                </Pressable>
+              ) : null}
+            </View>
+            {list.length === 0 ? (
+              <Text style={styles.empty}>Empty pool.</Text>
+            ) : (
+              list.map((d) => (
+                <View key={d.key} style={styles.rowWrap}>
+                  <View style={{ flex: 1 }}>
+                    <DocumentRow doc={d} onMove={(doc) => setPicker({ doc })} />
+                  </View>
+                  <Pressable onPress={() => confirmDelete(d)} hitSlop={10}><Trash2 color={colors.inkMuted} size={18} /></Pressable>
+                </View>
+              ))
+            )}
           </Card>
         ))
       )}
+
+      <PoolPickerSheet
+        visible={picker === 'upload'}
+        pools={pools}
+        selected={uploadPool}
+        allowEmpty
+        title="Upload to pool"
+        onChoose={(p) => { setUploadPool(p); setPicker(null) }}
+        onDismiss={() => setPicker(null)}
+        onCreated={refresh}
+      />
+      <PoolPickerSheet
+        visible={picker === 'newpool'}
+        pools={pools}
+        selected=""
+        allowEmpty={false}
+        startInCreate
+        title="Create a pool"
+        onChoose={() => setPicker(null)}
+        onDismiss={() => setPicker(null)}
+        onCreated={refresh}
+      />
+      <PoolPickerSheet
+        visible={typeof picker === 'object' && picker !== null}
+        pools={pools}
+        selected={typeof picker === 'object' && picker ? picker.doc.pool : ''}
+        allowEmpty={false}
+        title={typeof picker === 'object' && picker ? `Move "${picker.doc.file_name}"` : 'Move document'}
+        onChoose={(p) => { if (typeof picker === 'object' && picker) movePickedTo(picker.doc, p) }}
+        onDismiss={() => setPicker(null)}
+        onCreated={refresh}
+      />
     </Screen>
   )
 }
 
 const styles = StyleSheet.create({
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { fontFamily: fonts.display, fontSize: 24, color: colors.ink },
+  newPoolBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: colors.indigo, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 7 },
+  newPoolBtnText: { fontFamily: fonts.bodyMedium, fontSize: 13, color: colors.indigo },
   uploadChip: { width: 52, height: 52, borderRadius: 16, backgroundColor: colors.indigoSoft, alignItems: 'center', justifyContent: 'center' },
   uploadHint: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
+  poolRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: colors.surfaceAlt },
+  poolRowLabel: { fontFamily: fonts.bodyMedium, fontSize: 12, color: colors.inkSoft },
+  poolRowValue: { fontFamily: fonts.bodyMedium, fontSize: 13, color: colors.ink },
   empty: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft },
   pool: { fontFamily: fonts.displaySemi, fontSize: 15, color: colors.ink },
   rowWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -127,4 +253,10 @@ const styles = StyleSheet.create({
   progressPct: { fontFamily: fonts.mono, fontSize: 12, color: colors.inkSoft },
   progressTrack: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceAlt, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3, backgroundColor: colors.indigo },
+  unassignedCard: { borderColor: 'rgba(245,158,11,0.4)', backgroundColor: 'rgba(245,158,11,0.05)' },
+  unassignedTitle: { fontFamily: fonts.bodySemi, fontSize: 14, color: colors.ink },
+  unassignedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingVertical: 6 },
+  unassignedName: { flex: 1, fontFamily: fonts.body, fontSize: 13, color: colors.ink },
+  chooseBtn: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6 },
+  chooseBtnText: { fontFamily: fonts.bodyMedium, fontSize: 12, color: colors.ink },
 })

@@ -188,6 +188,18 @@ class DocumentIngestionPipeline:
             logger.error(f"Error listing documents: {exc}")
             return []
 
+    def document_still_at(self, user_id: str, pool: str, file_name: str) -> bool:
+        """
+        True if the document is still stored at exactly ``pool``. Used by
+        callers whose work spans a slow background step (e.g. LLM graph
+        extraction, which can take 10-30s) to detect that the document was
+        moved to a different pool *while that step was running* — a real
+        race: upload -> pool captured -> extraction starts -> user moves the
+        doc -> extraction finishes and would otherwise attach its result to
+        the pool the doc used to be in, not where it actually lives now.
+        """
+        return bool(self.redis_client.exists(f"document:{user_id}:{pool}:{file_name}"))
+
     def delete_document(self, file_name: str, pool: str, user_id: str) -> Optional[int]:
         """
         Delete a document from Redis and remove its JSON backup from disk.

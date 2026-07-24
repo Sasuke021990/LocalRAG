@@ -1,6 +1,7 @@
 import React from 'react'
-import { View, Text, StyleSheet } from 'react-native'
+import { View, Text, StyleSheet, Pressable } from 'react-native'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigation } from '@react-navigation/native'
 import { FileText, Boxes } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
@@ -11,12 +12,17 @@ import { useAuthStore } from '../stores/authStore'
 import { colors, fonts } from '../theme/tokens'
 
 export default function HomeScreen() {
+  const nav = useNavigation<any>()
   const email = useAuthStore((s) => s.user?.email || '')
   const docsQ = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
   const poolsQ = useQuery({ queryKey: ['pools'], queryFn: fetchPools })
 
   const docs = docsQ.data?.documents ?? []
   const recent = [...docs].sort((a, b) => (b.processed_at || '').localeCompare(a.processed_at || '')).slice(0, 5)
+
+  function goToKnowledge() {
+    nav.navigate('Knowledge')
+  }
 
   return (
     <Screen>
@@ -26,16 +32,20 @@ export default function HomeScreen() {
       <Card style={{ alignItems: 'center' }}><UsageRing /></Card>
 
       <View style={{ flexDirection: 'row', gap: 12 }}>
-        <Card style={styles.stat}>
-          <View style={[styles.chip, { backgroundColor: colors.indigoSoft }]}><FileText color={colors.indigo} size={18} /></View>
-          <Text style={styles.statNum}>{docs.length}</Text>
-          <Text style={styles.statLabel}>Documents</Text>
-        </Card>
-        <Card style={styles.stat}>
-          <View style={[styles.chip, { backgroundColor: colors.pinkSoft }]}><Boxes color={colors.pink} size={18} /></View>
-          <Text style={styles.statNum}>{poolsQ.data?.pools.length ?? 0}</Text>
-          <Text style={styles.statLabel}>Pools</Text>
-        </Card>
+        <Pressable style={styles.stat} onPress={goToKnowledge}>
+          <Card>
+            <View style={[styles.chip, { backgroundColor: colors.indigoSoft }]}><FileText color={colors.indigo} size={18} /></View>
+            <Text style={styles.statNum}>{docs.length}</Text>
+            <Text style={styles.statLabel}>Documents</Text>
+          </Card>
+        </Pressable>
+        <Pressable style={styles.stat} onPress={goToKnowledge}>
+          <Card>
+            <View style={[styles.chip, { backgroundColor: colors.pinkSoft }]}><Boxes color={colors.pink} size={18} /></View>
+            <Text style={styles.statNum}>{poolsQ.data?.pools.length ?? 0}</Text>
+            <Text style={styles.statLabel}>Pools</Text>
+          </Card>
+        </Pressable>
       </View>
 
       <Card>

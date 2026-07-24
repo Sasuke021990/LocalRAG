@@ -613,7 +613,12 @@ async def upload_document(
                                 main_loop,
                             )
                             nodes, edges = future.result(timeout=120)
-                            if nodes or edges:
+                            # Guard against the doc having been moved to a
+                            # different pool while extraction (a slow LLM
+                            # call) was still running — merging into the
+                            # stale captured `safe_pool` would silently
+                            # attach this graph data to the wrong pool.
+                            if (nodes or edges) and ingestion_pipeline.document_still_at(user_id, safe_pool, safe_filename):
                                 graph_store.merge_document(
                                     ingestion_pipeline.redis_client,
                                     user_id, safe_pool, safe_filename, nodes, edges,

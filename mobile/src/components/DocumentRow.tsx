@@ -1,10 +1,16 @@
 import React from 'react'
-import { View, Text, StyleSheet } from 'react-native'
-import { FileText } from 'lucide-react-native'
+import { View, Text, StyleSheet, Pressable } from 'react-native'
+import { FileText, FolderInput } from 'lucide-react-native'
 import { colors, fonts, radius } from '../theme/tokens'
 import type { Doc } from '../api/documents'
 
-export default function DocumentRow({ doc }: { doc: Doc }) {
+interface Props {
+  doc: Doc
+  // Omit for read-only contexts (e.g. Home's "recent documents" list).
+  onMove?: (doc: Doc) => void
+}
+
+export default function DocumentRow({ doc, onMove }: Props) {
   return (
     <View style={styles.row}>
       <View style={styles.chip}><FileText color={colors.indigo} size={18} /></View>
@@ -14,6 +20,11 @@ export default function DocumentRow({ doc }: { doc: Doc }) {
         {doc.summary ? <Text style={styles.summary} numberOfLines={2}>{doc.summary}</Text> : null}
       </View>
       {doc.pool_assigned === false ? <Text style={styles.needs}>needs a pool</Text> : null}
+      {onMove ? (
+        <Pressable onPress={() => onMove(doc)} hitSlop={10}>
+          <FolderInput color={colors.inkMuted} size={18} />
+        </Pressable>
+      ) : null}
     </View>
   )
 }

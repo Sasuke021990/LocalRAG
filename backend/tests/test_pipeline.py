@@ -142,6 +142,19 @@ class TestStorageRoundTrip:
         missing = tmp_path / "does-not-exist"
         assert pipeline.reindex_from_disk(str(missing)) == 0
 
+    def test_document_still_at_true_when_present(self, pipeline, redis_client):
+        pipeline._store_in_redis("/tmp/report.pdf", ["chunk"], [[0.1, 0.2]], "Finance", self.USER_A)
+        assert pipeline.document_still_at(self.USER_A, "Finance", "report.pdf") is True
+
+    def test_document_still_at_false_after_move_or_delete(self, pipeline, redis_client):
+        pipeline._store_in_redis("/tmp/report.pdf", ["chunk"], [[0.1, 0.2]], "Finance", self.USER_A)
+        pipeline.delete_document("report.pdf", "Finance", self.USER_A)
+        assert pipeline.document_still_at(self.USER_A, "Finance", "report.pdf") is False
+
+    def test_document_still_at_false_for_wrong_pool(self, pipeline, redis_client):
+        pipeline._store_in_redis("/tmp/report.pdf", ["chunk"], [[0.1, 0.2]], "Finance", self.USER_A)
+        assert pipeline.document_still_at(self.USER_A, "General", "report.pdf") is False
+
     def test_new_document_has_blank_summary(self, pipeline, redis_client):
         # summary is only populated later, by update_document_summary — a
         # freshly-stored document must not error/omit the key (task.md §1d).

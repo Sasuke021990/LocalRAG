@@ -22,7 +22,8 @@ export const DOCUMENT_MIME_TYPES = [
 ]
 
 export const fetchPools = () => request<{ pools: Pool[]; total: number }>('/pools')
-export const createPool = (name: string) => request('/pools', jsonBody('POST', { name }))
+export const createPool = (name: string) => request<{ status: string; pool: string }>('/pools', jsonBody('POST', { name }))
+export const deletePool = (name: string) => request(`/pools/${encodeURIComponent(name)}`, { method: 'DELETE' })
 
 export const fetchDocuments = () => request<{ documents: Doc[]; total: number }>('/documents')
 

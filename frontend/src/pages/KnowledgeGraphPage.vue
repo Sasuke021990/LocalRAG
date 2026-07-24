@@ -7,7 +7,7 @@ import * as billingApi from '../api/billing.js'
 import { useToastStore } from '../stores/toast.js'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
-import { Share2, Lock, RefreshCw } from 'lucide-vue-next'
+import { Share2, Lock, RefreshCw, Locate } from 'lucide-vue-next'
 
 const toast = useToastStore()
 const router = useRouter()
@@ -24,6 +24,8 @@ const repulsion = ref(280)         // maps to the d3 charge-force strength
 const svgRef = ref(null)
 let simulation = null
 let sel = null                     // { node, link, label } d3 selections
+let zoomBehavior = null
+let svgSelection = null
 
 const INDIGO = '#6366F1'
 const PINK = '#EC4899'
@@ -83,9 +85,9 @@ function render() {
   const links = graph.value.edges.map((e) => ({ ...e }))
 
   const container = svg.append('g')
-  svg.call(
-    d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => container.attr('transform', event.transform)),
-  )
+  zoomBehavior = d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => container.attr('transform', event.transform))
+  svg.call(zoomBehavior)
+  svgSelection = svg
 
   const link = container.append('g')
     .attr('stroke', INK_MUTED).attr('stroke-opacity', 0.5)
@@ -106,15 +108,21 @@ function render() {
 
   const label = container.append('g')
     .selectAll('text').data(nodes).join('text')
-    .text((d) => d.label)
+    .text((d) => (d.label.length > 22 ? d.label.slice(0, 21) + '…' : d.label))
     .attr('font-size', 11).attr('fill', '#1E1B2E')
     .attr('dx', 12).attr('dy', 4).style('pointer-events', 'none')
+    // White halo keeps overlapping labels legible on dense graphs.
+    .attr('stroke', '#fff').attr('stroke-width', 3).style('paint-order', 'stroke')
+    .attr('stroke-linejoin', 'round')
 
   simulation = d3.forceSimulation(nodes)
     .force('link', d3.forceLink(links).id((d) => d.id).distance(90))
     .force('charge', d3.forceManyBody().strength(-repulsion.value))
     .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collide', d3.forceCollide().radius(28))
+    // Larger than the node's own radius so labels get real breathing room —
+    // pure charge repulsion alone let nodes (and their labels) drift too
+    // close together on a dense graph.
+    .force('collide', d3.forceCollide().radius(46))
     .on('tick', () => {
       link.attr('x1', (d) => d.source.x).attr('y1', (d) => d.source.y)
         .attr('x2', (d) => d.target.x).attr('y2', (d) => d.target.y)
@@ -132,7 +140,7 @@ function applyHighlight() {
   if (!id) {
     sel.node.attr('fill', INDIGO).attr('opacity', 1)
     sel.link.attr('stroke', INK_MUTED).attr('stroke-opacity', 0.5)
-    sel.label.attr('opacity', 1)
+    sel.label.style('display', null)
     return
   }
   const neighbors = new Set([id])
@@ -151,7 +159,8 @@ function applyHighlight() {
     const s = l.source.id ?? l.source, t = l.target.id ?? l.target
     return s === id || t === id ? 0.9 : 0.1
   })
-  sel.label.attr('opacity', (d) => (neighbors.has(d.id) ? 1 : 0.25))
+  // Only the focused node + its neighbours keep labels — declutters a dense graph.
+  sel.label.style('display', (d) => (neighbors.has(d.id) ? null : 'none'))
 }
 
 function onRepulsionInput() {
@@ -163,6 +172,12 @@ function onRepulsionInput() {
 
 function goToBilling() {
   router.push('/billing')
+}
+
+function recenter() {
+  if (zoomBehavior && svgSelection) {
+    svgSelection.transition().duration(300).call(zoomBehavior.transform, d3.zoomIdentity)
+  }
 }
 
 onMounted(init)
@@ -229,6 +244,11 @@ onBeforeUnmount(stopSim)
       <Card class="p-0 overflow-hidden">
         <div class="relative">
           <svg ref="svgRef" class="w-full" style="height: 560px; display: block;"></svg>
+
+          <button v-if="hasGraph" type="button" title="Recenter" @click="recenter"
+            class="absolute right-3 bottom-3 w-9 h-9 rounded-full bg-surface border border-border-subtle shadow-sm flex items-center justify-center text-indigo hover:bg-indigo/5 cursor-pointer">
+            <Locate class="w-4 h-4" />
+          </button>
 
           <div v-if="!hasGraph && !graphLoading"
             class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-6">

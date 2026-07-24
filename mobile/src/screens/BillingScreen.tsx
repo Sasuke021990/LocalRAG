@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { View, Text, StyleSheet, Alert, Pressable, Modal, TextInput } from 'react-native'
+import { useQueryClient } from '@tanstack/react-query'
 import { Check } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
@@ -45,6 +46,7 @@ interface Card_ {
 }
 
 export default function BillingScreen() {
+  const qc = useQueryClient()
   const plan = useUsageStore((s) => s.plan)
   const user = useAuthStore((s) => s.user)
   const refresh = useAuthStore((s) => s.refresh)
@@ -81,6 +83,10 @@ export default function BillingScreen() {
       else await billingApi.checkout(planId)
       await refresh()
       billingApi.fetchSubscription().then(setSub).catch(() => {})
+      // Other screens (e.g. the Graph tab's plan gate) read the subscription
+      // via React Query — drop their cached copy so the plan change is seen
+      // immediately, not just here on the Billing screen.
+      qc.invalidateQueries({ queryKey: ['subscription'] })
       const name = cards.find((p) => p.id === planId)?.name ?? planId
       Alert.alert(planId === 'free' ? 'Switched to Free' : `You're now on ${name}`)
     } catch (err: any) {
