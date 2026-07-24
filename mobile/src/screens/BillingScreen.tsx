@@ -22,7 +22,7 @@ function featureList(p: Plan): string[] {
   const items = [`${p.storage_gb} GB storage`]
   if (f.pools) items.push('Unlimited pools')
   if (f.hybrid_chat) items.push('Hybrid search + chat')
-  if (f.api_tokens) items.push('API token access')
+  if (f.api_tokens) items.push('Unlimited API/MCP tokens')
   if (f.webhooks) items.push('Webhooks')
   if (f.priority_processing) items.push('Priority processing')
   if (f.team_members) items.push(`Team sharing (up to ${f.team_members})`)
@@ -156,15 +156,21 @@ export default function BillingScreen() {
             <Text style={styles.planName}>{p.name}</Text>
             {p.highlight ? <Badge label="Popular" color="pink" /> : p.contactOnly ? <Badge label="Enterprise" color="indigo" /> : null}
           </View>
-          <Text style={styles.price}>{p.price}<Text style={styles.per}> / {p.period}</Text></Text>
-          <View style={{ gap: 6, marginVertical: 12 }}>
-            {p.features.map((f) => (
-              <View key={f} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Check color={colors.emerald} size={15} />
-                <Text style={styles.feature}>{f}</Text>
+          {p.contactOnly ? (
+            <Text style={[styles.price, { marginVertical: 12 }]}>{p.price}</Text>
+          ) : (
+            <>
+              <Text style={styles.price}>{p.price}<Text style={styles.per}> / {p.period}</Text></Text>
+              <View style={{ gap: 6, marginVertical: 12 }}>
+                {p.features.map((f) => (
+                  <View key={f} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Check color={colors.emerald} size={15} />
+                    <Text style={styles.feature}>{f}</Text>
+                  </View>
+                ))}
               </View>
-            ))}
-          </View>
+            </>
+          )}
           {p.contactOnly
             ? <Button title="Contact us" variant="secondary" onPress={openContact} />
             : p.id === plan

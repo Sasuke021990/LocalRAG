@@ -4,6 +4,8 @@
 
 **Status key**: `[x]` done & verified · `[ ]` not started · `[~]` partially done (see note)
 
+> **Current priority (2026-07-24): mobile-first launch.** Web/backend work (§1's new features, §3 reliability items) is on hold unless it's a shared-backend blocker for mobile. Everything mobile-launch-related should be pulled to the top of this file as it's scoped.
+
 ---
 
 ## 0. What's already shipped (context, not action items)
@@ -56,16 +58,20 @@ Specs below are locked from planning discussion; nothing in this section has any
 - [ ] **Timing (decided — simplest option)**: generate the summary **at upload time**, as a decoupled background pass — same pattern as Knowledge Graph's extraction step (§1a). Reuses an already-planned pattern instead of building a separate on-demand-generate + cache + progressive-loading path for the list view, which would be more UI work for less gain.
 - [ ] Needs: the background summary-generation step (reuses `generation/llm.py`), storage for the summary text per document, and a new list UI (web + mobile)
 
-### 1e. MCP/API token template section *(requested this session)*
-- [~] **Likely already done** — `TokenManager.vue` already shows a copy-paste `curlExample()`/`mcpConfigExample()` in the token-reveal modal (built in an earlier session pass, matching the intent of "a template section like webhooks have"). Needs a quick verification pass against what's live today to confirm it actually matches the quality/completeness of the webhook template before marking this closed for good.
+### 1e. MCP/API token template section — **FIXED (web)**
+- [x] **Gap found and fixed**: the curl/MCP examples only existed inside the show-once token-reveal modal — closing it lost them entirely, unlike `WebhookManager.vue`'s always-available collapsible template section. Added a matching persistent "API / MCP setup template" section to `TokenManager.vue` using a `YOUR_TOKEN` placeholder, so the format is always there to reference even without a live token in hand.
+- [ ] **Mobile: not built at all.** There is no Integrations screen on mobile (`mobile/src/screens/`) — no token management, no webhook management. **Sequencing decided 2026-07-24: deferred to the end of the build order**, after the 3 headline mobile-launch features (Knowledge Graph §1a, Podcast Mode §1b, Insights Feed §1c) and Document summaries (§1d).
 
-### 1f. Unlimited MCP/API tokens as an explicit plan detail *(requested this session)*
-- [ ] Add "Unlimited MCP/API tokens" explicitly to every plan's feature list in `billing/plans.py` and `BillingPage.vue` — currently token creation isn't capped anywhere in the code, but it's also never *stated* as a plan benefit. Make it explicit rather than implicit.
+### 1f. Unlimited MCP/API tokens as an explicit plan detail — **FIXED**
+- [x] Confirmed no token-count cap anywhere in the backend. `featureList()` in both `BillingPage.vue` and mobile's `BillingScreen.tsx` now renders "Unlimited API/MCP tokens" (was the vaguer "API token access") whenever a plan's `api_tokens` flag is set — true for every tier today. `billing/plans.py`'s docstring updated to state it explicitly too.
 
-### 1g. Customize plan card — simplified display *(requested this session)*
-- [ ] `BillingPage.vue`: for the Customize plan card, stop listing individual features — show only the word **"Custom"** and a **"Contact us"** button below it, nothing else.
+### 1g. Customize plan card — simplified display — **FIXED**
+- [x] `BillingPage.vue` and mobile `BillingScreen.tsx`: the Customize card no longer renders the per-plan feature checklist or the "/ period" price suffix — just the plan name/Enterprise badge, the word **"Custom"**, and the **"Contact us"** button.
 
-### 1h. New "Team/Org" plan tier — restructuring *(requested this session, changes the confirmed 2026-07-22 plan matrix)*
+### 1h. New "Team/Org" plan tier — restructuring — **DESCOPED (2026-07-24)**
+
+> Deliberately dropped from the mobile-launch push (per the 2026-07-24 mobile-first pivot, see top of file). Pricing/tier details below are kept for whenever this gets picked back up, not acted on now.
+
 - [ ] **Remove** "Team members / sharing (up to 5)" from the **Max** plan
 - [ ] **New plan tier** (name TBD — "Team Sharing" / "Org-wide" / other, not finalized): team sharing functionality, capped at **50 members per user**, priced **₹120/month · ₹1100/year**
 - [ ] **Rest of the new plan's feature row (storage, AI-quota/day, webhooks, priority-processing) — deliberately left undecided.** Noted here only as a placeholder; will be discussed and filled in later, not blocking other work in the meantime.

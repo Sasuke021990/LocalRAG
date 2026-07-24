@@ -8,10 +8,15 @@ in yet (see ``routes.py``). All the numbers below come from ``Config`` so they
 are env-configurable; only the "payment happened" gate is missing.
 
 Tiers (INR):
-  free      — 1 GB, 10 AI Q/day
-  pro       — 5 GB, 25 AI Q/day, webhooks, priority processing
-  max       — 15 GB, 30 AI Q/user/day (unlimited plan-wide), team sharing
+  free      — 1 GB, 10 AI Q/day, unlimited API/MCP tokens
+  pro       — 5 GB, 25 AI Q/day, unlimited API/MCP tokens, webhooks, priority processing
+  max       — 15 GB, 30 AI Q/user/day (unlimited plan-wide), unlimited API/MCP tokens, team sharing
   customize — contact-us only (no self-serve checkout); values set per customer
+
+Every tier's ``api_tokens`` feature flag is ``True`` and token creation is
+never rate-limited or capped anywhere in the code — this was previously
+true but undocumented/unadvertised; now stated explicitly (see the plan
+cards' feature list, ``frontend/src/pages/BillingPage.vue::featureList``).
 """
 
 from utils.config import config

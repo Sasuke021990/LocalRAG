@@ -46,7 +46,7 @@ function featureList(p) {
   const items = [`${p.storage_gb} GB storage`]
   if (f.pools) items.push('Unlimited pools')
   if (f.hybrid_chat) items.push('Hybrid search + chat')
-  if (f.api_tokens) items.push('API token access')
+  if (f.api_tokens) items.push('Unlimited API/MCP tokens')
   if (f.webhooks) items.push('Webhooks')
   if (f.priority_processing) items.push('Priority processing')
   if (f.team_members) items.push(`Team sharing (up to ${f.team_members})`)
@@ -182,15 +182,22 @@ async function submitContact() {
           <Badge v-if="p.highlight" color="pink">Popular</Badge>
           <Badge v-else-if="p.contactOnly" color="indigo">Enterprise</Badge>
         </div>
-        <p class="mt-3">
-          <span class="text-3xl font-bold font-display vaultly-gradtext">{{ p.price }}</span>
-          <span class="text-sm text-ink-soft"> / {{ p.period }}</span>
-        </p>
-        <ul class="flex flex-col gap-2 mt-5 mb-6 flex-1">
-          <li v-for="f in p.features" :key="f" class="flex items-center gap-2 text-sm text-ink-soft">
-            <Check class="w-4 h-4 text-emerald shrink-0" /> {{ f }}
-          </li>
-        </ul>
+        <template v-if="p.contactOnly">
+          <p class="mt-3 mb-6 flex-1">
+            <span class="text-3xl font-bold font-display vaultly-gradtext">{{ p.price }}</span>
+          </p>
+        </template>
+        <template v-else>
+          <p class="mt-3">
+            <span class="text-3xl font-bold font-display vaultly-gradtext">{{ p.price }}</span>
+            <span class="text-sm text-ink-soft"> / {{ p.period }}</span>
+          </p>
+          <ul class="flex flex-col gap-2 mt-5 mb-6 flex-1">
+            <li v-for="f in p.features" :key="f" class="flex items-center gap-2 text-sm text-ink-soft">
+              <Check class="w-4 h-4 text-emerald shrink-0" /> {{ f }}
+            </li>
+          </ul>
+        </template>
 
         <Button v-if="p.contactOnly" variant="secondary" block class="mt-auto" @click="openContact">Contact us</Button>
         <Button v-else-if="p.id === usage.plan" variant="secondary" block disabled class="mt-auto">Current plan</Button>

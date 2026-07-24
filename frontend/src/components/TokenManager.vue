@@ -6,13 +6,14 @@ import Button from './ui/Button.vue'
 import Input from './ui/Input.vue'
 import Modal from './ui/Modal.vue'
 import IconChip from './ui/IconChip.vue'
-import { KeyRound, Copy, Trash2, Plus } from 'lucide-vue-next'
+import { KeyRound, Copy, Trash2, Plus, ChevronDown } from 'lucide-vue-next'
 
 const toast = useToastStore()
 const tokens = ref([])
 const loading = ref(true)
 const newName = ref('')
 const creating = ref(false)
+const showTemplate = ref(false)
 
 // Show-once modal
 const revealed = ref(null) // { token, name, prefix }
@@ -132,5 +133,32 @@ const mcpConfigExample = (token) => JSON.stringify({
 
       <Button class="mt-5" block @click="revealed = null">Done</Button>
     </Modal>
+
+    <!-- Copy-paste setup template: same shape as the reveal-modal examples,
+         but with a placeholder token so it's still here after the modal's
+         one-time reveal is gone (mirrors WebhookManager's standing template). -->
+    <div class="mt-5 pt-4 border-t border-border-subtle">
+      <button type="button" class="flex items-center gap-1.5 text-sm font-semibold text-ink-soft hover:text-indigo cursor-pointer" @click="showTemplate = !showTemplate">
+        <ChevronDown class="w-3.5 h-3.5 transition-transform" :class="showTemplate ? 'rotate-180' : ''" />
+        API / MCP setup template
+      </button>
+      <div v-if="showTemplate" class="flex flex-col gap-3 mt-3">
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <p class="text-xs font-medium text-ink-soft">Try it with curl</p>
+            <button class="text-indigo hover:opacity-80 cursor-pointer" @click="copy(curlExample('YOUR_TOKEN'))"><Copy class="w-3.5 h-3.5" /></button>
+          </div>
+          <pre class="text-xs font-mono bg-surface-alt border border-border-subtle rounded-xl p-3 overflow-x-auto whitespace-pre-wrap">{{ curlExample('YOUR_TOKEN') }}</pre>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <p class="text-xs font-medium text-ink-soft">Claude Desktop MCP config</p>
+            <button class="text-indigo hover:opacity-80 cursor-pointer" @click="copy(mcpConfigExample('YOUR_TOKEN'))"><Copy class="w-3.5 h-3.5" /></button>
+          </div>
+          <pre class="text-xs font-mono bg-surface-alt border border-border-subtle rounded-xl p-3 overflow-x-auto">{{ mcpConfigExample('YOUR_TOKEN') }}</pre>
+        </div>
+        <p class="text-xs text-ink-muted">Replace <code class="font-mono">YOUR_TOKEN</code> with a real token from above — create one if you don't have it handy, tokens are only shown once at creation.</p>
+      </div>
+    </div>
   </div>
 </template>
