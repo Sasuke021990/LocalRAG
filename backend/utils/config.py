@@ -125,6 +125,12 @@ class Config:
     # not a runtime surprise. Generate with e.g. `openssl rand -hex 32`.
     JWT_SECRET: str = os.getenv('JWT_SECRET', '')
     SESSION_COOKIE_MAX_AGE_SECONDS: int = int(os.getenv('SESSION_COOKIE_MAX_AGE_SECONDS', 7 * 24 * 3600))
+    # Marks the session cookie Secure (browser only sends it over HTTPS).
+    # Defaults on -- disable only for local HTTP-only development where the
+    # web app isn't accessed as https:// (plain http://localhost is exempt
+    # from this by the browser itself, but a LAN IP like http://192.168.x.x
+    # is not, and would silently never receive the cookie with this left on).
+    SESSION_COOKIE_SECURE: bool = os.getenv('SESSION_COOKIE_SECURE', 'True').lower() == 'true'
     # Client-side inactivity timeout: after this many seconds with no user
     # interaction (mouse/keyboard/touch/scroll), the frontend shows a "still
     # there?" popup and force-logs-out if it goes unanswered for another

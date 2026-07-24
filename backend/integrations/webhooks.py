@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from utils.config import config
+from utils.url_safety import is_safe_external_url
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,20 @@ def _cast(raw: Dict[str, Any], webhook_id: str) -> Dict[str, Any]:
 def create_webhook(
     redis_client, user_id: str, url: str, events: List[str], secret: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Register a webhook. Raises ValueError if any event is unsupported."""
+    """Register a webhook. Raises ValueError if any event is unsupported or
+    the URL isn't a safe external https:// address (SSRF guard — see
+    utils/url_safety.py; rejects loopback/link-local/private/metadata/
+    multicast/reserved targets)."""
     unsupported = set(events) - SUPPORTED_EVENTS
     if unsupported:
         raise ValueError(
             f"Unsupported event(s): {', '.join(sorted(unsupported))}. "
             f"Supported: {', '.join(sorted(SUPPORTED_EVENTS))}"
+        )
+    if not is_safe_external_url(url):
+        raise ValueError(
+            "url must be a public https:// address — internal, loopback, "
+            "link-local, and metadata-service addresses are not allowed"
         )
 
     webhook_id = uuid.uuid4().hex
@@ -130,9 +139,18 @@ def _post_with_retries(url: str, body_bytes: bytes, headers: Dict[str, str]) -> 
     """
     POST with up to ``WEBHOOK_MAX_RETRIES`` attempts. Returns
     ``(ok: bool, status: str)``. Never raises.
+
+    Re-validates the URL is still safe on *every* attempt, not just once
+    before the loop — DNS can change between attempts (rebinding): a
+    hostname that resolved to a public address on attempt 1 could resolve
+    to an internal one by the retry a few seconds later. A registration-time
+    check alone (create_webhook) is not sufficient defense against that.
     """
     last_status = "no attempt"
     for attempt in range(1, config.WEBHOOK_MAX_RETRIES + 1):
+        if not is_safe_external_url(url):
+            logger.warning(f"Webhook delivery blocked — URL no longer resolves safely: {url}")
+            return False, "blocked: unsafe URL"
         try:
             resp = requests.post(
                 url, data=body_bytes, headers=headers, timeout=config.WEBHOOK_TIMEOUT_SECONDS

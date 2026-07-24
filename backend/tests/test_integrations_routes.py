@@ -3,6 +3,17 @@ HTTP-level tests for /integrations/* (tokens + webhooks) via the
 ``api_client`` fixture, plus the token-auth-vs-session-only boundary.
 """
 
+import pytest
+
+from integrations import webhooks
+
+
+@pytest.fixture(autouse=True)
+def bypass_url_safety_check(monkeypatch):
+    """See test_webhooks.py's fixture of the same name -- these tests use
+    fake example.com-style URLs and aren't about the SSRF guard itself."""
+    monkeypatch.setattr(webhooks, "is_safe_external_url", lambda url: True)
+
 
 def _signup(api_client, email="user@example.com"):
     resp = api_client.post("/auth/signup", json={"email": email, "password": "longenough123"})
@@ -98,6 +109,27 @@ class TestWebhookManagement:
             json={"url": "ftp://nope", "events": ["document.ingested"]},
         )
         assert resp.status_code == 422
+
+    def test_create_plain_http_url_422(self, api_client):
+        # SECURITY.md M2: plain http:// webhook endpoints are no longer
+        # allowed at all, not just non-http(s) schemes.
+        _signup(api_client)
+        resp = api_client.post(
+            "/integrations/webhooks",
+            json={"url": "http://example.com/hook", "events": ["document.ingested"]},
+        )
+        assert resp.status_code == 422
+
+    def test_create_internal_url_rejected_400(self, api_client, monkeypatch):
+        # The SSRF guard itself runs in the store layer (webhooks.create_webhook),
+        # past pydantic's syntactic https:// check -- surfaces as 400, not 422.
+        monkeypatch.setattr(webhooks, "is_safe_external_url", lambda url: False)
+        _signup(api_client)
+        resp = api_client.post(
+            "/integrations/webhooks",
+            json={"url": "https://169.254.169.254/latest/meta-data/", "events": ["document.ingested"]},
+        )
+        assert resp.status_code == 400
 
     def test_test_endpoint_queues_for_known_webhook(self, api_client, monkeypatch):
         # TestClient runs the BackgroundTask synchronously after the response,

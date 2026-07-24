@@ -142,7 +142,8 @@ class TestGoogleCallback:
         # auth_client's app doesn't follow redirects by default in a way
         # that matters here -- just assert the callback doesn't error and
         # the account was linked, not duplicated.
-        resp = auth_client.get("/auth/google/callback", params={"code": "irrelevant"}, follow_redirects=False)
+        state = store.create_oauth_state(redis_client)
+        resp = auth_client.get("/auth/google/callback", params={"code": "irrelevant", "state": state}, follow_redirects=False)
         assert resp.status_code in (302, 307)
         # The redirect MUST carry the session cookie, or the user lands on
         # the frontend still logged out (regression guard).
@@ -178,7 +179,8 @@ class TestGoogleCallback:
             google_oauth, "exchange_code_for_userinfo",
             lambda code: {"sub": "google-sub-789", "email": "brandnew@example.com"},
         )
-        resp = auth_client.get("/auth/google/callback", params={"code": "irrelevant"}, follow_redirects=False)
+        state = store.create_oauth_state(redis_client)
+        resp = auth_client.get("/auth/google/callback", params={"code": "irrelevant", "state": state}, follow_redirects=False)
         assert resp.status_code in (302, 307)
         assert "set-cookie" in {k.lower() for k in resp.headers}
 
@@ -191,3 +193,58 @@ class TestGoogleCallback:
         me = auth_client.get("/auth/me")
         assert me.status_code == 200
         assert me.json()["email"] == "brandnew@example.com"
+
+
+class TestOAuthStateCsrfProtection:
+    """SECURITY.md M6: the callback must reject any request that didn't
+    genuinely round-trip through /auth/google/login first."""
+
+    def test_callback_without_state_rejected(self, auth_client, monkeypatch):
+        monkeypatch.setattr(
+            google_oauth, "exchange_code_for_userinfo",
+            lambda code: {"sub": "should-not-be-reached", "email": "x@example.com"},
+        )
+        resp = auth_client.get("/auth/google/callback", params={"code": "irrelevant"}, follow_redirects=False)
+        assert resp.status_code == 400
+
+    def test_callback_with_forged_state_rejected(self, auth_client, monkeypatch):
+        monkeypatch.setattr(
+            google_oauth, "exchange_code_for_userinfo",
+            lambda code: {"sub": "should-not-be-reached", "email": "x@example.com"},
+        )
+        resp = auth_client.get(
+            "/auth/google/callback",
+            params={"code": "irrelevant", "state": "attacker-guessed-this-value"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_state_is_single_use(self, auth_client, redis_client, monkeypatch):
+        monkeypatch.setattr(
+            google_oauth, "exchange_code_for_userinfo",
+            lambda code: {"sub": "google-sub-single-use", "email": "singleuse@example.com"},
+        )
+        state = store.create_oauth_state(redis_client)
+
+        first = auth_client.get("/auth/google/callback", params={"code": "c1", "state": state}, follow_redirects=False)
+        assert first.status_code in (302, 307)
+
+        # Replaying the exact same callback URL a second time (e.g. a
+        # captured/logged request) must not work -- the state was consumed.
+        second = auth_client.get("/auth/google/callback", params={"code": "c2", "state": state}, follow_redirects=False)
+        assert second.status_code == 400
+
+    def test_login_route_issues_a_consumable_state(self, auth_client, redis_client, monkeypatch):
+        """End-to-end sanity check: the state /auth/google/login actually
+        puts in the redirect URL is one consume_oauth_state will accept."""
+        login_resp = auth_client.get("/auth/google/login", follow_redirects=False)
+        assert login_resp.status_code in (302, 307)
+        location = login_resp.headers["location"]
+        state = dict(pair.split("=") for pair in location.split("?", 1)[1].split("&"))["state"]
+
+        monkeypatch.setattr(
+            google_oauth, "exchange_code_for_userinfo",
+            lambda code: {"sub": "google-sub-e2e", "email": "e2e@example.com"},
+        )
+        resp = auth_client.get("/auth/google/callback", params={"code": "c", "state": state}, follow_redirects=False)
+        assert resp.status_code in (302, 307)

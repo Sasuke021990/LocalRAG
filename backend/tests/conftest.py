@@ -121,6 +121,23 @@ def disable_rate_limiting(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def disable_secure_cookie(monkeypatch):
+    """
+    TestClient (auth_client/api_client) makes requests against a fake
+    http://testserver, not real HTTPS — a `Secure`-flagged cookie set by a
+    response is correctly *not* resent by the client on the next request
+    over that non-HTTPS connection (real browser semantics, faithfully
+    reproduced by httpx). Without this override, every test relying on
+    session-cookie continuity across requests (login-then-/me, logout,
+    account deletion, etc.) would fail — not because the app is broken, but
+    because the test harness itself isn't HTTPS. Production keeps
+    SESSION_COOKIE_SECURE=True (see SECURITY.md M1).
+    """
+    from utils.config import config
+    monkeypatch.setattr(config, "SESSION_COOKIE_SECURE", False)
+
+
+@pytest.fixture(autouse=True)
 def patched_embedding_models(monkeypatch):
     """Replace SentenceTransformer with the deterministic fake everywhere it's imported."""
     import ingestion.pipeline as pipeline_module

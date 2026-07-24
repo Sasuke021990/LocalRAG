@@ -1,7 +1,6 @@
 """Auth endpoints: signup, login, logout, me, Google OAuth, password reset."""
 
 import logging
-import uuid
 
 import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
@@ -42,6 +41,7 @@ def _set_session_cookie(response: Response, user_id: str, token_version: int) ->
         token,
         httponly=True,
         samesite="lax",
+        secure=config.SESSION_COOKIE_SECURE,
         max_age=config.SESSION_COOKIE_MAX_AGE_SECONDS,
     )
     return token
@@ -187,13 +187,13 @@ async def me(user_id: str = Depends(require_current_user)):
 @router.get("/google/login")
 async def google_login():
     """
-    Redirects to Google's consent screen.
-
-    NOTE: the CSRF ``state`` parameter is generated but not stored/verified
-    on callback -- acceptable for a first pass on a self-hosted app, not
-    for public exposure. See .plan/task_plan.md Open Questions #1.
+    Redirects to Google's consent screen. The ``state`` parameter is
+    recorded server-side (Redis, single-use, 10-min TTL) and verified on
+    callback (see google_callback) -- defends against a forged callback
+    being fed to a victim's browser without them ever starting a real
+    Google login (SECURITY.md M6).
     """
-    state = uuid.uuid4().hex
+    state = store.create_oauth_state(redis_client)
     return RedirectResponse(google_oauth.build_authorization_url(state))
 
 
@@ -214,8 +214,10 @@ def _resolve_google_user(userinfo: dict) -> dict:
 
 
 @router.get("/google/callback")
-async def google_callback(code: str):
+async def google_callback(code: str, state: str = ""):
     """Web flow: Google redirects here; we set a cookie and redirect to the app."""
+    if not store.consume_oauth_state(redis_client, state):
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     user = _resolve_google_user(google_oauth.exchange_code_for_userinfo(code))
     # Set the cookie on the RedirectResponse itself, not on an injected
     # Response param: when a handler *returns* a Response object, FastAPI

@@ -16,7 +16,7 @@ Condensed so this doc is self-orienting without re-reading the whole history:
 - **Knowledge Base**: pool creation flow, document upload with real per-phase progress + image/OCR support, move/delete documents.
 - **Mobile**: full parity pass (auth, chat/pools/markdown/sources, upload progress, admin panel) + Expo SDK 51→54 upgrade.
 - **Admin panel**: web + newly-built mobile version — stats, settings, user management (quota/admin-toggle/active-toggle/delete).
-- **Security**: full 5-check audit (`SECURITY.md`) — both Highs fixed (Redis auth+lockdown, auth rate limiting) and all 7 Lows fixed (Swagger gating, reset-token TTL, logout revocation, self-service deletion, no more logged admin passwords, quieter OAuth error logs, untracked `mcp/node_modules`). **6 Mediums still open — see §4.**
+- **Security**: full 5-check audit (`SECURITY.md`) — both Highs fixed (Redis auth+lockdown, auth rate limiting), all 7 Lows fixed (Swagger gating, reset-token TTL, logout revocation, self-service deletion, no more logged admin passwords, quieter OAuth error logs, untracked `mcp/node_modules`), and all 6 Mediums fixed (Secure cookie, webhook SSRF guard, upload path-traversal sanitization, no more leaked exception text, HTTP security headers, OAuth state CSRF check — see §4 for verification detail).
 - **Defects**: 4 reported bugs fixed and verified live — stale semantic cache after document delete/upload, stale cache after conversation delete, pool-creation Save button race (see `defect.md`).
 
 ---
@@ -97,16 +97,18 @@ Specs below are locked from planning discussion; nothing in this section has any
 - [ ] Observability: structured logging, error tracking, metrics
 - [ ] Vector index silently disappearing with no self-heal (`/health` doesn't verify `idx:chunks` exists; `knn_search()` doesn't detect+recreate on "no such index")
 
-## 4. Security — Medium findings still open (`SECURITY.md`)
+## 4. Security — Medium findings (`SECURITY.md`) — **all 6 fixed**
 
-| # | Finding | Note |
+| # | Finding | Fix |
 |---|---|---|
-| M1 | Session cookie missing `Secure` flag | One line in `_set_session_cookie` |
-| M2 | SSRF via user-registered webhook URLs | No block-list for internal/metadata ranges |
-| M3 | Path traversal via unsanitised upload `file.filename` | Same item as `plan.md` §D "sanitize uploaded filenames" |
-| M4 | Internal exception text leaked to clients | `detail=str(exc)` in multiple `main.py` handlers |
-| M5 | No HTTP security headers | HSTS, CSP, X-Frame-Options, nosniff |
-| M6 | OAuth `state` generated but never verified on callback | Login CSRF risk |
+| M1 | Session cookie missing `Secure` flag | ✅ `SESSION_COOKIE_SECURE` (default `True`) passed to `_set_session_cookie` |
+| M2 | SSRF via user-registered webhook URLs | ✅ `utils/url_safety.py` blocks internal/loopback/link-local/metadata ranges at registration + delivery |
+| M3 | Path traversal via unsanitised upload `file.filename` | ✅ `_sanitize_filename()` strips directory components via `os.path.basename()` |
+| M4 | Internal exception text leaked to clients | ✅ `_internal_error()` helper — generic message + correlation ID to client, full detail logged server-side only |
+| M5 | No HTTP security headers | ✅ middleware sets HSTS, CSP, X-Frame-Options, nosniff |
+| M6 | OAuth `state` generated but never verified on callback | ✅ server-issued single-use Redis-backed state, verified on every callback |
+
+Verified: full backend suite (417 passing, 3 unrelated pre-existing pro-tier quota test failures unrelated to this work) + live against a rebuilt Docker stack (see `SECURITY.md` "Verification" section for the exact checks run for each). Committed and pushed.
 
 Plus: email verification on signup (`plan.md` §D) — still not implemented.
 

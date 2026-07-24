@@ -9,6 +9,18 @@ import pytest
 from integrations import webhooks
 
 
+@pytest.fixture(autouse=True)
+def bypass_url_safety_check(monkeypatch):
+    """
+    These tests are about webhook CRUD/delivery/retry logic, not the SSRF
+    guard itself (see test_url_safety.py for that, tested hermetically with
+    IP literals and a mocked resolver) -- real DNS resolution of fake
+    domains like example.com/a.com/b.com would make this suite flaky and
+    network-dependent for something unrelated to what it's testing.
+    """
+    monkeypatch.setattr(webhooks, "is_safe_external_url", lambda url: True)
+
+
 class _FakeResponse:
     def __init__(self, status_code):
         self.status_code = status_code

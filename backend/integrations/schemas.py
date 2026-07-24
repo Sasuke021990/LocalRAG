@@ -46,9 +46,14 @@ class WebhookCreateRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def _validate_url(cls, v: str) -> str:
+        # Cheap syntactic check only -- the real SSRF-safety check (DNS
+        # resolution + internal-range rejection, see utils/url_safety.py)
+        # happens in webhooks.create_webhook, where a failure can be
+        # reported as a clear "that URL isn't allowed" error rather than a
+        # generic 422 from pydantic.
         v = v.strip()
-        if not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("url must start with http:// or https://")
+        if not v.startswith("https://"):
+            raise ValueError("url must start with https:// (plain http:// webhook endpoints are not allowed)")
         return v
 
     @field_validator("events")
