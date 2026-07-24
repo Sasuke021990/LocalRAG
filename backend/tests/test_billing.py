@@ -8,6 +8,7 @@ import pytest
 
 from billing import plans
 from billing import store as billing_store
+from utils.config import config
 
 
 class TestPlanCatalog:
@@ -30,9 +31,12 @@ class TestPlanCatalog:
         assert plans.quota_for("nonsense") == plans.quota_for(plans.DEFAULT_PLAN)
 
     def test_ai_question_limits_per_tier(self):
-        assert plans.ai_questions_per_day_for("free") == 10
-        assert plans.ai_questions_per_day_for("pro") == 25
-        assert plans.ai_questions_per_day_for("max") == 30
+        # Values are env-configurable (see utils/config.py); assert the
+        # catalog wires each tier to *its* config knob, not a specific
+        # deployment's numbers.
+        assert plans.ai_questions_per_day_for("free") == config.FREE_AI_QUESTIONS_PER_DAY
+        assert plans.ai_questions_per_day_for("pro") == config.PRO_AI_QUESTIONS_PER_DAY
+        assert plans.ai_questions_per_day_for("max") == config.MAX_AI_QUESTIONS_PER_DAY_PER_USER
 
     def test_feature_gating_flags(self):
         assert not plans.has_feature("free", "webhooks")
@@ -48,9 +52,11 @@ class TestPlanCatalog:
         assert plans.PLANS["customize"]["price_inr_monthly"] is None
 
     def test_conversation_limits_per_tier(self):
-        assert plans.conversation_limit_for("free") == 5
-        assert plans.conversation_limit_for("pro") == 15
-        assert plans.conversation_limit_for("max") == 20
+        # Same rationale as test_ai_question_limits_per_tier — these are
+        # env-configurable, so assert against config, not a magic number.
+        assert plans.conversation_limit_for("free") == config.FREE_CONVERSATION_LIMIT
+        assert plans.conversation_limit_for("pro") == config.PRO_CONVERSATION_LIMIT
+        assert plans.conversation_limit_for("max") == config.MAX_CONVERSATION_LIMIT
 
     def test_conversation_limit_for_unknown_falls_back_to_default(self):
         assert plans.conversation_limit_for("nonsense") == plans.conversation_limit_for(plans.DEFAULT_PLAN)
