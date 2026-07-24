@@ -491,6 +491,14 @@ async def upload_document(
         task_id = uuid.uuid4().hex
         upload_progress.set_progress(auth_redis_client, task_id, user_id, 0, "Queued for processing…")
 
+        # Captured on the request's own event loop so _process() (which runs
+        # in a worker thread, see below) can safely hand the summary call
+        # back to *this* loop via run_coroutine_threadsafe — asyncio.run()
+        # in the worker thread would spin up a second loop, which the
+        # embedded LLM backend's asyncio.Lock (bound to whichever loop first
+        # acquires it) can't safely be used from.
+        main_loop = asyncio.get_running_loop()
+
         # Queue background processing
         # NOTE: Plain `def` (not `async def`) so FastAPI routes this to a
         # threadpool executor — keeping the asyncio event loop free for other
@@ -543,6 +551,24 @@ async def upload_document(
                         {"file_name": safe_filename, "pool": safe_pool,
                          "pool_assigned": pool_explicitly_selected, "chunk_count": result["total_chunks"]},
                     )
+
+                    # Best-effort AI summary, after the upload is already
+                    # marked complete — a slow/unavailable LLM must never
+                    # retroactively fail an otherwise-successful upload
+                    # (task.md §1d).
+                    try:
+                        if result.get("chunks"):
+                            future = asyncio.run_coroutine_threadsafe(
+                                answer_pipeline.summarize_document(result["chunks"], local_llm),
+                                main_loop,
+                            )
+                            summary = future.result(timeout=120)
+                            if summary:
+                                ingestion_pipeline.update_document_summary(
+                                    user_id, safe_pool, safe_filename, summary,
+                                )
+                    except Exception as exc:
+                        logger.warning(f"Summary generation failed for '{safe_filename}': {exc}")
             except Exception as exc:
                 logger.error(f"Background processing failed for '{safe_filename}': {exc}")
                 upload_progress.set_progress(

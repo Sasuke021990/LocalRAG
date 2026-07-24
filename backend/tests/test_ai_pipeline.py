@@ -262,6 +262,38 @@ class TestConversationalMemory:
         assert events[-1][1]["answer"] == "cached"
 
 
+@pytest.mark.anyio
+class TestSummarizeDocument:
+    """task.md §1d — the one-shot summary call used by the post-upload
+    background pass, not the retrieval/chat pipeline."""
+
+    async def test_drains_llm_output(self):
+        llm = FakeLLM("A short summary of the document.")
+        summary = await pipeline.summarize_document(["chunk one", "chunk two"], llm)
+        assert summary == "A short summary of the document."
+        assert llm.called is True
+
+    async def test_forces_no_think_regardless_of_config(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_THINKING_ENABLED", True)
+        llm = FakeLLM("summary")
+        await pipeline.summarize_document(["chunk"], llm)
+        assert llm.last_user.endswith(grounding.thinking_directive(False))
+
+    async def test_empty_chunks_returns_blank_without_calling_llm(self):
+        llm = FakeLLM("should not run")
+        assert await pipeline.summarize_document([], llm) == ""
+        assert llm.called is False
+
+    async def test_llm_not_ready_returns_blank_without_calling_llm(self):
+        llm = FakeLLM("should not run", ready=False)
+        assert await pipeline.summarize_document(["chunk"], llm) == ""
+        assert llm.called is False
+
+    async def test_strips_surrounding_whitespace(self):
+        llm = FakeLLM("  \n  padded summary  \n  ")
+        assert await pipeline.summarize_document(["chunk"], llm) == "padded summary"
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"

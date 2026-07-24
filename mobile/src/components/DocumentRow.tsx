@@ -11,6 +11,7 @@ export default function DocumentRow({ doc }: { doc: Doc }) {
       <View style={{ flex: 1 }}>
         <Text style={styles.name} numberOfLines={1}>{doc.file_name}</Text>
         <Text style={styles.meta}>{doc.chunk_count} chunks · pool: {doc.pool}</Text>
+        {doc.summary ? <Text style={styles.summary} numberOfLines={2}>{doc.summary}</Text> : null}
       </View>
       {doc.pool_assigned === false ? <Text style={styles.needs}>needs a pool</Text> : null}
     </View>
@@ -22,5 +23,6 @@ const styles = StyleSheet.create({
   chip: { width: 36, height: 36, borderRadius: radius.sm, backgroundColor: colors.indigoSoft, alignItems: 'center', justifyContent: 'center' },
   name: { fontFamily: fonts.bodyMedium, fontSize: 14, color: colors.ink },
   meta: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
+  summary: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft, marginTop: 2 },
   needs: { fontFamily: fonts.bodySemi, fontSize: 11, color: colors.amber },
 })

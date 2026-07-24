@@ -141,3 +141,49 @@ class TestStorageRoundTrip:
     def test_reindex_from_disk_missing_dir_returns_zero(self, pipeline, tmp_path):
         missing = tmp_path / "does-not-exist"
         assert pipeline.reindex_from_disk(str(missing)) == 0
+
+    def test_new_document_has_blank_summary(self, pipeline, redis_client):
+        # summary is only populated later, by update_document_summary — a
+        # freshly-stored document must not error/omit the key (task.md §1d).
+        pipeline._store_in_redis("/tmp/report.pdf", ["chunk"], [[0.1, 0.2]], "Finance", self.USER_A)
+        docs = pipeline.list_documents(self.USER_A)
+        assert docs[0]["summary"] == ""
+
+
+class TestUpdateDocumentSummary:
+    USER_A = "user-summary"
+
+    def test_updates_redis_blob(self, pipeline, redis_client):
+        pipeline._store_in_redis("/tmp/report.pdf", ["chunk"], [[0.1, 0.2]], "Finance", self.USER_A)
+
+        ok = pipeline.update_document_summary(self.USER_A, "Finance", "report.pdf", "A concise summary.")
+
+        assert ok is True
+        docs = pipeline.list_documents(self.USER_A)
+        assert docs[0]["summary"] == "A concise summary."
+
+    def test_updates_json_backup_on_disk(self, pipeline, redis_client, tmp_path, monkeypatch):
+        from utils.config import config
+        monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
+        pipeline._save_json_backup("/tmp/report.pdf", ["chunk"], [[0.1, 0.2]], "Finance", self.USER_A)
+        pipeline._store_in_redis("/tmp/report.pdf", ["chunk"], [[0.1, 0.2]], "Finance", self.USER_A)
+
+        pipeline.update_document_summary(self.USER_A, "Finance", "report.pdf", "Backup should have this too.")
+
+        backup_path = tmp_path / self.USER_A / "Finance" / "report.json"
+        saved = json.loads(backup_path.read_text(encoding="utf-8"))
+        assert saved["summary"] == "Backup should have this too."
+
+    def test_missing_document_returns_false(self, pipeline, redis_client):
+        ok = pipeline.update_document_summary(self.USER_A, "Finance", "ghost.pdf", "irrelevant")
+        assert ok is False
+
+    def test_does_not_touch_other_documents(self, pipeline, redis_client):
+        pipeline._store_in_redis("/tmp/a.pdf", ["chunk"], [[0.1, 0.2]], "General", self.USER_A)
+        pipeline._store_in_redis("/tmp/b.pdf", ["chunk"], [[0.3, 0.4]], "General", self.USER_A)
+
+        pipeline.update_document_summary(self.USER_A, "General", "a.pdf", "summary for a")
+
+        docs = {d["file_name"]: d["summary"] for d in pipeline.list_documents(self.USER_A)}
+        assert docs["a.pdf"] == "summary for a"
+        assert docs["b.pdf"] == ""

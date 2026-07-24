@@ -55,6 +55,28 @@ def _fallback_answer(query: str, sources: List[Dict[str, Any]]) -> str:
     return f"Found {len(sources)} relevant passage(s) for: '{query}'\nTop sources: {top}\n\n{body}"
 
 
+async def summarize_document(chunks: List[str], llm) -> str:
+    """
+    One-shot LLM summary for a newly-ingested document (Knowledge Base list
+    view, task.md §1d). Runs as a background pass after ingestion completes,
+    decoupled from the upload-blocking path — same "drain generate_stream
+    into a string" approach as ``stream_answer``'s ``answer_parts``, just
+    without the retrieval/refusal/caching machinery a chat answer needs.
+    Forces non-thinking mode (fast, cheap) regardless of ``LLM_THINKING_ENABLED``
+    — a summary doesn't need visible reasoning. Returns "" if the LLM is
+    disabled/unavailable or produced nothing usable, so callers can treat a
+    blank summary as "not available yet" rather than an error.
+    """
+    if not chunks or not getattr(llm, "ready", False):
+        return ""
+    system_prompt = grounding.build_summary_prompt(chunks)
+    user_prompt = "Summarize the document above." + grounding.thinking_directive(False)
+    parts: List[str] = []
+    async for token in llm.generate_stream(system_prompt, user_prompt):
+        parts.append(token)
+    return "".join(parts).strip()
+
+
 async def stream_answer(
     *,
     user_id: str,

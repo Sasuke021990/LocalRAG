@@ -125,6 +125,29 @@ class TestPromptBuilder:
         assert grounding.build_grounded_messages("q", ["c"], history=None) == grounding.build_grounded_messages("q", ["c"])
 
 
+class TestSummaryPromptBuilder:
+    def test_prompt_contains_document_content(self):
+        p = grounding.build_summary_prompt(["alpha chunk", "beta chunk"])
+        assert "alpha chunk" in p
+        assert "beta chunk" in p
+
+    def test_prompt_asks_for_short_summary_not_an_answer(self):
+        p = grounding.build_summary_prompt(["some content"])
+        assert "summary" in p.lower()
+        # Distinct from the Q&A system prompt — no numbered-citation instruction.
+        assert "[1]" not in p
+
+    def test_empty_chunks_still_builds(self):
+        p = grounding.build_summary_prompt([])
+        assert "(empty document)" in p
+
+    def test_oversized_chunks_truncated_to_budget(self):
+        big = "x" * 5000
+        p = grounding.build_summary_prompt([big, big, big], char_budget=4000)
+        assert len(p) < 4000 + 1000
+        assert "…" in p
+
+
 class TestThinkingDirective:
     def test_thinking_true_appends_think(self):
         assert grounding.thinking_directive(True) == " /think"

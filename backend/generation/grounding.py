@@ -170,6 +170,26 @@ def build_system_prompt(
     )
 
 
+def build_summary_prompt(chunks: List[str], char_budget: int = 4000) -> str:
+    """
+    System instruction for a single-shot "summarize this document" call
+    (Knowledge Base list view, task.md §1d) — same context-budgeting as
+    ``build_system_prompt``, but asks for a short standalone summary
+    instead of an answer to a question.
+    """
+    kept = _truncate_to_budget(chunks, char_budget)
+    context = "\n\n".join(kept) or "(empty document)"
+    return (
+        "You are summarizing a document for a knowledge-base list view. Write "
+        "a concise 2-3 sentence summary of what this document contains, in "
+        "plain everyday language. No preamble or meta-commentary (don't say "
+        "\"this document is about\" or similar) — just the summary itself. "
+        "If the content is empty or unreadable, reply with exactly: "
+        "\"(no readable content)\"\n\n"
+        f"Document content:\n{context}"
+    )
+
+
 def thinking_directive(thinking: bool) -> str:
     """
     Qwen3-family hybrid-thinking models accept a soft switch appended to the
