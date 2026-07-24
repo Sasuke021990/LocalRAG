@@ -18,7 +18,9 @@ ranked-passage summary) — so this is a strict upgrade over the old behavior,
 never a regression.
 """
 
+import json
 import logging
+import re
 from typing import Any, AsyncIterator, Dict, List, Tuple
 
 from generation import grounding
@@ -75,6 +77,54 @@ async def summarize_document(chunks: List[str], llm) -> str:
     async for token in llm.generate_stream(system_prompt, user_prompt):
         parts.append(token)
     return "".join(parts).strip()
+
+
+def _parse_graph_json(raw: str) -> Tuple[List[str], List[Tuple[str, str, str]]]:
+    """
+    Best-effort parse of the extraction model's output into
+    ``(node_labels, edge_triples)``. Tolerant of markdown fences and leading/
+    trailing prose: grabs the outermost ``{...}`` and validates shape, dropping
+    any malformed entry rather than raising. Returns ``([], [])`` on total
+    failure so a bad extraction can never crash the upload.
+    """
+    if not raw:
+        return [], []
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return [], []
+    try:
+        data = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return [], []
+
+    nodes = [str(n).strip() for n in data.get("nodes", []) if str(n).strip()]
+    edges: List[Tuple[str, str, str]] = []
+    for e in data.get("edges", []):
+        if isinstance(e, (list, tuple)) and len(e) >= 2:
+            src, dst = str(e[0]).strip(), str(e[1]).strip()
+            label = str(e[2]).strip() if len(e) >= 3 else "related to"
+            if src and dst:
+                edges.append((src, dst, label))
+    return nodes, edges
+
+
+async def extract_graph_elements(chunks: List[str], llm) -> Tuple[List[str], List[Tuple[str, str, str]]]:
+    """
+    One-shot LLM knowledge-graph extraction for a newly-ingested document
+    (task.md §1a). Runs as a background pass after ingestion, decoupled from
+    the upload-blocking path — same drain-the-stream approach as
+    ``summarize_document``. Returns ``(node_labels, edge_triples)``; an empty
+    result (LLM disabled/unavailable, empty doc, or unparseable output) is a
+    valid "no graph data for this document" outcome, never an error.
+    """
+    if not chunks or not getattr(llm, "ready", False):
+        return [], []
+    system_prompt = grounding.build_graph_extraction_prompt(chunks)
+    user_prompt = "Extract the knowledge graph as JSON." + grounding.thinking_directive(False)
+    parts: List[str] = []
+    async for token in llm.generate_stream(system_prompt, user_prompt):
+        parts.append(token)
+    return _parse_graph_json("".join(parts).strip())
 
 
 async def stream_answer(

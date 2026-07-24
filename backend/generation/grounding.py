@@ -190,6 +190,36 @@ def build_summary_prompt(chunks: List[str], char_budget: int = 4000) -> str:
     )
 
 
+def build_graph_extraction_prompt(chunks: List[str], char_budget: int = 6000) -> str:
+    """
+    System instruction for the knowledge-graph extraction pass (task.md §1a):
+    pull the key concepts/entities and the relationships between them out of a
+    document, as strict JSON. Same context-budgeting as the other builders.
+    The model is told to keep labels short (a concept, not a sentence) and to
+    return nothing but the JSON object, so the caller can parse it directly.
+    """
+    kept = _truncate_to_budget(chunks, char_budget)
+    context = "\n\n".join(kept) or "(empty document)"
+    return (
+        "You are building a knowledge graph from a document. Extract the main "
+        "concepts/entities and the relationships between them.\n\n"
+        "Rules:\n"
+        "- Each concept label must be SHORT — a noun or noun phrase of 1-4 words, "
+        "not a sentence. Use Title Case.\n"
+        "- Extract at most 12 concepts and at most 15 relationships — only the "
+        "most important ones.\n"
+        "- Each relationship connects two of the extracted concepts with a short "
+        "verb phrase (1-3 words), e.g. \"issued to\", \"excludes\", \"requires\".\n"
+        "- Reply with ONLY a JSON object, no prose, no markdown fences, in exactly "
+        "this shape:\n"
+        '{"nodes": ["Concept A", "Concept B"], '
+        '"edges": [["Concept A", "Concept B", "relates to"]]}\n'
+        "- If the document has no meaningful concepts, reply with: "
+        '{"nodes": [], "edges": []}\n\n'
+        f"Document content:\n{context}"
+    )
+
+
 def thinking_directive(thinking: bool) -> str:
     """
     Qwen3-family hybrid-thinking models accept a soft switch appended to the

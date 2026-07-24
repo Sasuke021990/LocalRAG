@@ -44,6 +44,13 @@ class TestPlanCatalog:
         assert plans.has_feature("max", "priority_processing")
         assert plans.features_for("max")["team_members"] >= 5
 
+    def test_knowledge_graph_is_pro_plus(self):
+        # task.md §1a: visible-but-locked on Free, full access on Pro/Max.
+        assert not plans.has_feature("free", "knowledge_graph")
+        assert plans.has_feature("pro", "knowledge_graph")
+        assert plans.has_feature("max", "knowledge_graph")
+        assert plans.has_feature("customize", "knowledge_graph")
+
     def test_customize_is_contact_only(self):
         assert plans.is_self_serve("free")
         assert plans.is_self_serve("pro")
