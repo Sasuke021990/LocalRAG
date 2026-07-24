@@ -27,15 +27,17 @@ Condensed so this doc is self-orienting without re-reading the whole history:
 
 Specs below are locked from planning discussion; nothing in this section has any code written yet.
 
-### 1a. Interactive Knowledge Graph
-- [ ] NER/topic extraction: **LLM-based**, decoupled from the upload-blocking path (upload still completes fast; extraction runs as a background pass afterward)
-- [ ] Graph storage in Redis: nodes + edges, each tracking which document(s) back them (source-list per node/edge)
-- [ ] **Delete handling ("correct" version, locked)**: deleting a document removes it from every node/edge's source list; a node/edge with an empty source list is deleted entirely; still-supported nodes/edges are untouched
-- [ ] **Backfill: none** — only documents uploaded *after* this ships get graph data; existing documents don't retroactively get processed
-- [ ] **Platform: web + mobile from day one** (mobile via WebView embedding the same D3 view, per the original blueprint)
-- [ ] New API: `GET /pools/{pool}/graph` → `{nodes, edges}`
-- [ ] Web UI: D3.js force-directed graph — "Highlight Concept" selector, "Node Repulsion Force" slider (matches the provided mockups)
-- [ ] **Plan gating**: visible in Free but faded/locked — tapping it prompts an upgrade, doesn't open. Full access on Pro/Max.
+### 1a. Interactive Knowledge Graph — **FIXED**
+- [x] NER/topic extraction: **LLM-based**, decoupled from the upload-blocking path — `generation/pipeline.py::extract_graph_elements()` (drains `generate_stream`, tolerant JSON parse) wired into `main.py` `_process()`'s background pass right after the summary step, own try/except, `run_coroutine_threadsafe` onto the request loop.
+- [x] Graph storage in Redis: `knowledge_graph/store.py` — nodes + edges, each with a source-document list; concepts dedup across documents by slug. Keys mirror the webhooks SET+per-item convention.
+- [x] **Delete handling (locked "correct" version)**: `store.remove_document()` strips a doc from every element's source list and deletes any left empty; shared elements survive. Wired into `delete_document` and the cross-pool branch of `move_document`. An invariant (edge endpoints always superset the edge's sources) + a dangling-edge skip in `get_pool_graph` guarantee no stranded edges. Verified live: deleting the only doc emptied the graph.
+- [x] **Backfill: none** — extraction only runs on new uploads; the endpoint returns an empty graph for pools with only pre-feature documents.
+- [x] **Platform: web + mobile.** Web: `KnowledgeGraphPage.vue` (real D3.js force graph). Mobile: `KnowledgeGraphScreen.tsx` embeds a WebView. *Deviation from blueprint:* the mobile WebView renders a **self-contained vanilla-JS force graph** (`components/graphHtml.ts`) rather than inlining the 270 KB D3 bundle into an HTML string — same force-directed UX (drag, tap-to-focus, repulsion presets), no external fetch, works offline. Noted intentionally.
+- [x] New API: `GET /pools/{pool}/graph` → `{nodes, edges}` (gated).
+- [x] Web UI: D3 force-directed graph with **"Highlight concept" selector** and **"Node repulsion force" slider** (live-updates the charge force), drag/zoom/click-to-focus, per the mockups.
+- [x] **Plan gating**: `knowledge_graph` feature flag (Free False, Pro/Max/Customize True). Endpoint 403s on Free; web + mobile both show a lock/upsell card with a "See plans"/"Upgrade" CTA instead of the graph.
+- [x] 35 backend tests (store dedup/cascade/dangling-edge, JSON-parse robustness, extractor, plan flag). Full suite 455 passed. Mobile: `tsc` clean + full `expo export` bundle succeeded. Web: Vite build clean (d3 bundled). Backend live-verified end-to-end (Free→403, Pro→200 with a real 10-node/5-edge extraction, delete emptied the graph).
+- [ ] **Not yet visually verified in-browser / on-device** — browser tool unavailable this session; no device/simulator run. Do a real visual pass (web graph interactions + mobile WebView render) before calling the UI fully done.
 
 ### 1b. Podcast Mode
 - [ ] Summarizer prompt (new system prompt variant in `grounding.py`, reuses existing `generation/llm.py` pipeline)

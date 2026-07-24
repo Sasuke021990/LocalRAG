@@ -32,6 +32,14 @@ export const deleteDocument = (fileName: string, pool: string) =>
 export const moveDocument = (fileName: string, currentPool: string, newPool: string) =>
   request(`/documents/${encodeURIComponent(fileName)}/pool`, jsonBody('PATCH', { current_pool: currentPool, new_pool: newPool }))
 
+export interface GraphNode { id: string; label: string; source_count: number }
+export interface GraphEdge { source: string; target: string; label: string }
+export interface PoolGraph { nodes: GraphNode[]; edges: GraphEdge[] }
+
+// Knowledge graph for a pool. Pro+ only — a Free-tier account gets 403.
+export const fetchPoolGraph = (pool: string) =>
+  request<PoolGraph>(`/pools/${encodeURIComponent(pool)}/graph`)
+
 export interface PickedFile { uri: string; name: string; mimeType?: string }
 
 export interface UploadStartResult {
