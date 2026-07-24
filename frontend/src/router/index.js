@@ -7,6 +7,7 @@ import ResetPasswordPage from '../pages/ResetPasswordPage.vue'
 import DashboardPage from '../pages/DashboardPage.vue'
 import ChatPage from '../pages/ChatPage.vue'
 import KnowledgeBasePage from '../pages/KnowledgeBasePage.vue'
+import KnowledgeGraphPage from '../pages/KnowledgeGraphPage.vue'
 import BillingPage from '../pages/BillingPage.vue'
 import SettingsPage from '../pages/SettingsPage.vue'
 import AdminPage from '../pages/AdminPage.vue'
@@ -18,6 +19,7 @@ const routes = [
   { path: '/', name: 'dashboard', component: DashboardPage },
   { path: '/chat', name: 'chat', component: ChatPage },
   { path: '/knowledge-base', name: 'knowledge-base', component: KnowledgeBasePage },
+  { path: '/knowledge-graph', name: 'knowledge-graph', component: KnowledgeGraphPage },
   { path: '/billing', name: 'billing', component: BillingPage },
   { path: '/settings', name: 'settings', component: SettingsPage },
   { path: '/admin', name: 'admin', component: AdminPage, meta: { admin: true } },

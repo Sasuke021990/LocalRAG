@@ -20,6 +20,9 @@ export const deleteDocument = (fileName, pool) =>
 export const moveDocument = (fileName, currentPool, newPool) =>
   request(`/documents/${encodeURIComponent(fileName)}/pool`, jsonBody('PATCH', { current_pool: currentPool, new_pool: newPool }))
 
+// Knowledge graph for a pool -> { nodes, edges }. Pro+ only (403 on Free).
+export const fetchPoolGraph = (pool) => request(`/pools/${encodeURIComponent(pool)}/graph`)
+
 // pool may be '' — the backend then lands it in General flagged pool_assigned=false.
 export function uploadDocument(file, pool = '', chunkSize = 512, chunkOverlap = 50) {
   const form = new FormData()
