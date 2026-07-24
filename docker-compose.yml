@@ -53,6 +53,7 @@ services:
       - RATE_LIMIT_SIGNUP_WINDOW=${RATE_LIMIT_SIGNUP_WINDOW:-3600}
       - RATE_LIMIT_RESET_MAX=${RATE_LIMIT_RESET_MAX:-5}
       - RATE_LIMIT_RESET_WINDOW=${RATE_LIMIT_RESET_WINDOW:-3600}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-True}
       - SESSION_IDLE_TIMEOUT_SECONDS=${SESSION_IDLE_TIMEOUT_SECONDS:-60}
       # Billing / plan limits (INR) — Free/Pro/Max storage, AI-question quota,
       # saved-conversation cap, pricing, team size. See .env.example.

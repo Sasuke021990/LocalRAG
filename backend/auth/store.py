@@ -11,6 +11,7 @@ user_email_index:<email lower>    STRING -> user_id
 user_username_index:<username lower> STRING -> user_id
 user_google_index:<google sub>    STRING -> user_id
 password_reset:<token>            STRING -> user_id  (TTL 15 min)
+oauth_state:<state>               STRING -> "1"       (TTL 10 min)
 """
 
 import logging
@@ -26,6 +27,10 @@ logger = logging.getLogger(__name__)
 # Kept short (15 min) so a captured reset link has a narrow window of use —
 # see SECURITY.md finding L2 (was 1 hour).
 PASSWORD_RESET_TTL_SECONDS = 900
+
+# Generous but bounded — covers a slow consent screen without leaving state
+# values valid indefinitely. See SECURITY.md finding M6.
+OAUTH_STATE_TTL_SECONDS = 600
 
 
 def _user_key(user_id: str) -> str:
@@ -46,6 +51,10 @@ def _google_index_key(sub: str) -> str:
 
 def _reset_token_key(token: str) -> str:
     return f"password_reset:{token}"
+
+
+def _oauth_state_key(state: str) -> str:
+    return f"oauth_state:{state}"
 
 
 def create_user(
@@ -190,6 +199,31 @@ def consume_password_reset_token(redis_client, token: str) -> Optional[str]:
         return None
     redis_client.delete(key)
     return user_id
+
+
+def create_oauth_state(redis_client) -> str:
+    """
+    Mint a CSRF ``state`` value for the Google OAuth redirect flow and
+    record that *we* issued it, so the callback can verify the request
+    genuinely round-tripped through Google rather than being a forged
+    callback hitting the endpoint directly (SECURITY.md M6).
+    """
+    state = uuid.uuid4().hex
+    redis_client.setex(_oauth_state_key(state), OAUTH_STATE_TTL_SECONDS, "1")
+    return state
+
+
+def consume_oauth_state(redis_client, state: str) -> bool:
+    """True if ``state`` was one we issued and it hasn't been used yet —
+    single-use, deleted immediately so a captured/replayed callback URL
+    can't be replayed a second time."""
+    if not state:
+        return False
+    key = _oauth_state_key(state)
+    if not redis_client.get(key):
+        return False
+    redis_client.delete(key)
+    return True
 
 
 def get_storage_used(redis_client, user_id: str) -> int:

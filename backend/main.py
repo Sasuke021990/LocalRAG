@@ -55,6 +55,22 @@ from utils.config import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _internal_error(exc: Exception, context: str) -> HTTPException:
+    """
+    Never leak internal exception text (stack traces, file paths, Redis
+    errors) to the client (SECURITY.md M4). Logs the real detail
+    server-side with a short correlation ID and returns only that ID + a
+    generic message to the caller, so the real cause is still findable by
+    grepping logs without ever exposing internals over the API.
+    """
+    correlation_id = uuid.uuid4().hex[:12]
+    logger.error(f"[{correlation_id}] {context}: {exc}")
+    return HTTPException(
+        status_code=500,
+        detail=f"Internal error (reference: {correlation_id}). Please try again or contact support.",
+    )
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 DATA_DIR = Path(config.DATA_DIR)
 ALLOWED_EXTENSIONS = {
@@ -90,6 +106,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """
+    Adds the standard defensive HTTP headers to every response
+    (SECURITY.md M5). ``setdefault`` so nothing here ever overrides a header
+    a route handler set deliberately.
+
+    Swagger/ReDoc (when API_DOCS_ENABLED — see L1) load their JS/CSS from a
+    CDN by default; a strict CSP would break their rendering, so those two
+    paths are exempted rather than fighting the CDN. They're already an
+    opt-in, gated surface, not the general API.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if request.url.path not in ("/docs", "/redoc"):
+        response.headers.setdefault("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+    return response
+
 
 app.include_router(auth_routes.router, prefix="/auth", tags=["Auth"])
 app.include_router(integrations_routes.router, prefix="/integrations", tags=["Integrations"])
@@ -230,6 +268,18 @@ def _sanitize_pool_name(name: str) -> str:
     return name.strip().replace("/", "_").replace("\\", "_").replace("..", "_")
 
 
+def _sanitize_filename(filename: Optional[str]) -> str:
+    """
+    Strip any directory components from an uploaded file's name before it's
+    ever used to build a filesystem path — a crafted name like
+    "../../<other_user_id>/General/evil.pdf" would otherwise let pathlib
+    resolve outside this user's own directory (SECURITY.md M3). Returns ""
+    for an empty/missing/traversal-only name; callers must check for that.
+    """
+    safe = os.path.basename((filename or "").strip())
+    return "" if safe in ("", ".", "..") else safe
+
+
 def _pool_document_counts(user_id: str) -> Dict[str, int]:
     """Map pool name → number of documents in it (from the Redis blobs)."""
     counts: Dict[str, int] = {}
@@ -253,7 +303,7 @@ async def list_pools(user_id: str = Depends(require_current_user)):
         pools = [{"name": name, "document_count": counts.get(name, 0)} for name in names]
         return {"pools": pools, "total": len(pools)}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _internal_error(exc, "Failed to list pools")
 
 
 @app.post("/pools", tags=["Pools"], summary="Create a new knowledge pool")
@@ -268,7 +318,7 @@ async def create_pool(request: PoolCreate, user_id: str = Depends(require_curren
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _internal_error(exc, "Failed to create pool")
 
 
 @app.delete("/pools/{name}", tags=["Pools"], summary="Delete an empty pool")
@@ -292,7 +342,7 @@ async def delete_pool(name: str, user_id: str = Depends(require_current_user)):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _internal_error(exc, "Failed to delete pool")
 
 
 # ─── Documents ────────────────────────────────────────────────────────────────
@@ -308,7 +358,7 @@ async def list_documents(user_id: str = Depends(require_current_user)):
         docs = ingestion_pipeline.list_documents(user_id)
         return {"documents": docs, "total": len(docs)}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _internal_error(exc, "Failed to list documents")
 
 
 @app.delete("/documents/{file_name}", tags=["Documents"], summary="Delete a document")
@@ -342,7 +392,7 @@ async def delete_document(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _internal_error(exc, "Failed to delete document")
 
 
 @app.patch("/documents/{file_name}/pool", tags=["Documents"], summary="Move/assign a document to a pool")
@@ -397,7 +447,14 @@ async def upload_document(
     ``.html``, ``.json``, ``.xml``
     """
     try:
-        file_ext = os.path.splitext(file.filename)[1].lower()
+        # Sanitized once here and used consistently for every downstream use
+        # (disk path, ingestion, logs, webhook payloads, response) so the
+        # reported name always matches what's actually on disk.
+        safe_filename = _sanitize_filename(file.filename)
+        if not safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid file name")
+
+        file_ext = os.path.splitext(safe_filename)[1].lower()
         if file_ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
@@ -422,7 +479,7 @@ async def upload_document(
         # Ensure directory exists and save file
         pool_dir = DATA_DIR / user_id / safe_pool
         pool_dir.mkdir(parents=True, exist_ok=True)
-        file_path = str(pool_dir / file.filename)
+        file_path = str(pool_dir / safe_filename)
 
         with open(file_path, "wb") as fh:
             fh.write(content)
@@ -452,15 +509,15 @@ async def upload_document(
                     pool_assigned=pool_explicitly_selected,
                     progress_callback=_on_progress,
                 )
-                logger.info(f"Processed: {file.filename} → {safe_pool} | {result['total_chunks']} chunks")
+                logger.info(f"Processed: {safe_filename} → {safe_pool} | {result['total_chunks']} chunks")
 
                 quota.record_ingested_document(ingestion_pipeline.redis_client, user_id, result["stored_bytes"])
                 if quota.is_over_quota(ingestion_pipeline.redis_client, user_id):
-                    freed = ingestion_pipeline.delete_document(file.filename, safe_pool, user_id)
+                    freed = ingestion_pipeline.delete_document(safe_filename, safe_pool, user_id)
                     if freed is not None:
                         quota.record_deleted_document(ingestion_pipeline.redis_client, user_id, freed)
                     logger.warning(
-                        f"Rolled back '{file.filename}' for user {user_id}: quota exceeded after ingestion"
+                        f"Rolled back '{safe_filename}' for user {user_id}: quota exceeded after ingestion"
                     )
                     upload_progress.set_progress(
                         auth_redis_client, task_id, user_id, 100,
@@ -468,7 +525,7 @@ async def upload_document(
                     )
                     webhooks.dispatch_event(
                         auth_redis_client, user_id, "document.ingest_failed",
-                        {"file_name": file.filename, "pool": safe_pool, "reason": "quota_exceeded"},
+                        {"file_name": safe_filename, "pool": safe_pool, "reason": "quota_exceeded"},
                     )
                 else:
                     # New/changed document set for this user — drop the stale
@@ -483,17 +540,17 @@ async def upload_document(
                     )
                     webhooks.dispatch_event(
                         auth_redis_client, user_id, "document.ingested",
-                        {"file_name": file.filename, "pool": safe_pool,
+                        {"file_name": safe_filename, "pool": safe_pool,
                          "pool_assigned": pool_explicitly_selected, "chunk_count": result["total_chunks"]},
                     )
             except Exception as exc:
-                logger.error(f"Background processing failed for '{file.filename}': {exc}")
+                logger.error(f"Background processing failed for '{safe_filename}': {exc}")
                 upload_progress.set_progress(
-                    auth_redis_client, task_id, user_id, 100, str(exc) or "Processing failed", status="failed",
+                    auth_redis_client, task_id, user_id, 100, "Processing failed", status="failed",
                 )
                 webhooks.dispatch_event(
                     auth_redis_client, user_id, "document.ingest_failed",
-                    {"file_name": file.filename, "pool": safe_pool, "reason": "processing_error"},
+                    {"file_name": safe_filename, "pool": safe_pool, "reason": "processing_error"},
                 )
 
         background_tasks.add_task(_process)
@@ -501,17 +558,16 @@ async def upload_document(
         return {
             "status": "processing_started",
             "task_id": task_id,
-            "filename": file.filename,
+            "filename": safe_filename,
             "pool": safe_pool,
             "pool_assigned": pool_explicitly_selected,
-            "message": f"'{file.filename}' queued for ingestion in pool '{safe_pool}'",
+            "message": f"'{safe_filename}' queued for ingestion in pool '{safe_pool}'",
         }
 
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"Upload error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _internal_error(exc, "Upload error")
 
 
 # ─── Query ────────────────────────────────────────────────────────────────────
@@ -617,8 +673,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
     except HTTPException:
         raise  # e.g. the 429 quota error, or a bad conversation_id — must not become a 500
     except Exception as exc:
-        logger.error(f"Query error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _internal_error(exc, "Query error")
 
 
 @app.post("/query/stream", tags=["Search"], summary="Streaming grounded AI answer (SSE)")
