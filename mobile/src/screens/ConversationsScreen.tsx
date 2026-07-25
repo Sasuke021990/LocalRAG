@@ -20,8 +20,15 @@ export default function ConversationsScreen() {
 
   const [editingId, setEditingId] = useState('')
   const [draft, setDraft] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => { loadConversations() }, [])
+
+  async function onRefresh() {
+    setRefreshing(true)
+    await loadConversations()
+    setRefreshing(false)
+  }
 
   async function open(c: ConversationSummary) {
     if (editingId) return
@@ -83,6 +90,8 @@ export default function ConversationsScreen() {
           data={conversations}
           keyExtractor={(c) => c.id}
           contentContainerStyle={{ gap: 4, paddingBottom: 20 }}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
           renderItem={({ item }) => (
             <View style={styles.row}>
               {editingId === item.id ? (

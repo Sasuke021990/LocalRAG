@@ -13,6 +13,8 @@ import { JetBrainsMono_600SemiBold } from '@expo-google-fonts/jetbrains-mono'
 
 import { colors } from './src/theme/tokens'
 import RootNavigator from './src/navigation/RootNavigator'
+import ErrorBoundary from './src/components/ErrorBoundary'
+import OfflineBanner from './src/components/OfflineBanner'
 import { setUnauthorizedHandler } from './src/api/client'
 import { useAuthStore } from './src/stores/authStore'
 
@@ -63,13 +65,16 @@ export default function App() {
   if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: colors.canvas }} />
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <SafeAreaProvider>
-        <NavigationContainer theme={navTheme as any} onReady={onReady}>
-          <StatusBar style="dark" />
-          <RootNavigator />
-        </NavigationContainer>
-      </SafeAreaProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <SafeAreaProvider>
+          <NavigationContainer theme={navTheme as any} onReady={onReady}>
+            <StatusBar style="dark" />
+            <RootNavigator />
+          </NavigationContainer>
+          <OfflineBanner />
+        </SafeAreaProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   )
 }

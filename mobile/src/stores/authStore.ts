@@ -65,6 +65,12 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
+    // Best-effort: revoke the token server-side (see api/auth.ts::logout)
+    // while it's still available to identify. Must never block the local
+    // logout on network failure -- the user can always log out locally
+    // regardless of connectivity, same as the backend's own "logging out
+    // when already logged out is a safe no-op" behavior.
+    try { await authApi.logout() } catch { /* offline or already-invalid token — fine */ }
     await clearToken()
     set({ user: null })
   },

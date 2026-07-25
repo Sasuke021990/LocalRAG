@@ -21,7 +21,10 @@ export default function DocumentRow({ doc, onMove }: Props) {
       </View>
       {doc.pool_assigned === false ? <Text style={styles.needs}>needs a pool</Text> : null}
       {onMove ? (
-        <Pressable onPress={() => onMove(doc)} hitSlop={10}>
+        // A real 40x40 tap target (not just hitSlop) -- at 18px-icon-plus-hitSlop
+        // this sat right next to the destructive delete button with only a
+        // few px between them, an easy mis-tap (task.md P1 #15).
+        <Pressable onPress={() => onMove(doc)} style={styles.actionBtn} hitSlop={4}>
           <FolderInput color={colors.inkMuted} size={18} />
         </Pressable>
       ) : null}
@@ -36,4 +39,5 @@ const styles = StyleSheet.create({
   meta: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
   summary: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft, marginTop: 2 },
   needs: { fontFamily: fonts.bodySemi, fontSize: 11, color: colors.amber },
+  actionBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
 })

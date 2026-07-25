@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { View, Text, StyleSheet, Pressable, Alert } from 'react-native'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useFocusEffect } from '@react-navigation/native'
 import * as DocumentPicker from 'expo-document-picker'
 import { Trash2, UploadCloud, Image as ImageIcon, Plus, ChevronDown, AlertCircle } from 'lucide-react-native'
 import Screen from '../components/Screen'
@@ -34,11 +35,23 @@ export default function KnowledgeScreen() {
   const [progressMessage, setProgressMessage] = useState('')
   const [uploadPool, setUploadPool] = useState('')
   const [picker, setPicker] = useState<PickerTarget>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   async function refresh() {
     await Promise.all([qc.invalidateQueries({ queryKey: ['documents'] }), qc.invalidateQueries({ queryKey: ['pools'] })])
     refreshUser()
   }
+
+  async function onRefresh() {
+    setRefreshing(true)
+    await refresh()
+    setRefreshing(false)
+  }
+
+  // Summaries and graph data can finish their background pass (task.md
+  // §1a/§1d) while the user is elsewhere -- refetch whenever this screen
+  // regains focus so completed work shows up without a manual pull.
+  useFocusEffect(useCallback(() => { docsQ.refetch(); poolsQ.refetch() }, []))
 
   async function upload() {
     const res = await DocumentPicker.getDocumentAsync({
@@ -109,7 +122,7 @@ export default function KnowledgeScreen() {
   const groupedEntries = Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0]))
 
   return (
-    <Screen>
+    <Screen refreshing={refreshing} onRefresh={onRefresh}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Knowledge Base</Text>
         <Pressable style={styles.newPoolBtn} onPress={() => setPicker('newpool')}>
@@ -179,8 +192,8 @@ export default function KnowledgeScreen() {
                 <Badge label={String(list.length)} color="indigo" />
               </View>
               {list.length === 0 && pool !== 'General' ? (
-                <Pressable onPress={() => confirmDeletePool(pool)} hitSlop={10}>
-                  <Trash2 color={colors.inkMuted} size={16} />
+                <Pressable onPress={() => confirmDeletePool(pool)} style={styles.deleteBtn} hitSlop={4}>
+                  <Trash2 color={colors.rose} size={16} />
                 </Pressable>
               ) : null}
             </View>
@@ -192,7 +205,13 @@ export default function KnowledgeScreen() {
                   <View style={{ flex: 1 }}>
                     <DocumentRow doc={d} onMove={(doc) => setPicker({ doc })} />
                   </View>
-                  <Pressable onPress={() => confirmDelete(d)} hitSlop={10}><Trash2 color={colors.inkMuted} size={18} /></Pressable>
+                  {/* A real 40x40 target with its own gap from the move button
+                      above -- both were 18px icons a few px apart, an easy
+                      way to hit "delete" while reaching for "move" (task.md
+                      P1 #15). */}
+                  <Pressable onPress={() => confirmDelete(d)} style={styles.deleteBtn} hitSlop={4}>
+                    <Trash2 color={colors.rose} size={18} />
+                  </Pressable>
                 </View>
               ))
             )}
@@ -247,7 +266,8 @@ const styles = StyleSheet.create({
   poolRowValue: { fontFamily: fonts.bodyMedium, fontSize: 13, color: colors.ink },
   empty: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft },
   pool: { fontFamily: fonts.displaySemi, fontSize: 15, color: colors.ink },
-  rowWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  rowWrap: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  deleteBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   progressRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   progressLabel: { flex: 1, fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
   progressPct: { fontFamily: fonts.mono, fontSize: 12, color: colors.inkSoft },

@@ -1,7 +1,7 @@
-import React from 'react'
+import React, { useCallback, useState } from 'react'
 import { View, Text, StyleSheet, Pressable } from 'react-native'
-import { useQuery } from '@tanstack/react-query'
-import { useNavigation } from '@react-navigation/native'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { FileText, Boxes } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
@@ -13,9 +13,11 @@ import { colors, fonts } from '../theme/tokens'
 
 export default function HomeScreen() {
   const nav = useNavigation<any>()
+  const qc = useQueryClient()
   const email = useAuthStore((s) => s.user?.email || '')
   const docsQ = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
   const poolsQ = useQuery({ queryKey: ['pools'], queryFn: fetchPools })
+  const [refreshing, setRefreshing] = useState(false)
 
   const docs = docsQ.data?.documents ?? []
   const recent = [...docs].sort((a, b) => (b.processed_at || '').localeCompare(a.processed_at || '')).slice(0, 5)
@@ -24,8 +26,19 @@ export default function HomeScreen() {
     nav.navigate('Knowledge')
   }
 
+  async function onRefresh() {
+    setRefreshing(true)
+    await Promise.all([qc.invalidateQueries({ queryKey: ['documents'] }), qc.invalidateQueries({ queryKey: ['pools'] })])
+    setRefreshing(false)
+  }
+
+  // Documents/summaries can finish their background pass (task.md §1a/§1d)
+  // while the user is elsewhere in the app -- refetch whenever Home regains
+  // focus so a just-completed summary shows up without a manual pull.
+  useFocusEffect(useCallback(() => { docsQ.refetch(); poolsQ.refetch() }, []))
+
   return (
-    <Screen>
+    <Screen refreshing={refreshing} onRefresh={onRefresh}>
       <Text style={styles.hi}>Welcome back,</Text>
       <Text style={styles.name}>{email.split('@')[0]}</Text>
 

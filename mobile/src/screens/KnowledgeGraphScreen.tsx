@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, ScrollView, Modal } from 'react-nati
 import { WebView } from 'react-native-webview'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
-import { Share2, Lock, ChevronDown, Check, Locate } from 'lucide-react-native'
+import { Share2, Lock, ChevronDown, Check, Locate, RefreshCw } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -28,6 +28,7 @@ export default function KnowledgeGraphScreen() {
   // pressing it remounts the graph fresh (pan/zoom reset to identity, same
   // trick already used for repulsion/pool/highlight changes).
   const [resetToken, setResetToken] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
 
   function selectPool(name: string) {
     setSelectedPool(name)
@@ -65,10 +66,19 @@ export default function KnowledgeGraphScreen() {
     }, [activePool]),
   )
 
+  // scroll={false} below (the graph needs a fixed, non-scrolling layout for
+  // its WebView) rules out RefreshControl, which requires a ScrollView --
+  // use a manual button instead.
+  async function onRefresh() {
+    setRefreshing(true)
+    await Promise.all([subQ.refetch(), poolsQ.refetch(), activePool ? graphQ.refetch() : Promise.resolve()])
+    setRefreshing(false)
+  }
+
   if (subQ.data && !allowed) {
     return (
       <Screen>
-        <Header />
+        <Header onRefresh={onRefresh} refreshing={refreshing} />
         <Card style={{ alignItems: 'center', gap: 12, paddingVertical: 32 }}>
           <View style={styles.lockChip}><Lock color={colors.amber} size={26} /></View>
           <Text style={styles.lockTitle}>The Knowledge Graph is a Pro feature</Text>
@@ -83,7 +93,7 @@ export default function KnowledgeGraphScreen() {
 
   return (
     <Screen scroll={false} contentStyle={{ gap: 12 }}>
-      <Header />
+      <Header onRefresh={onRefresh} refreshing={refreshing} />
 
       {pools.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}
@@ -187,14 +197,17 @@ export default function KnowledgeGraphScreen() {
   )
 }
 
-function Header() {
+function Header({ onRefresh, refreshing }: { onRefresh: () => void; refreshing: boolean }) {
   return (
     <View style={styles.header}>
       <View style={styles.headerChip}><Share2 color={colors.indigo} size={20} /></View>
-      <View>
+      <View style={{ flex: 1 }}>
         <Text style={styles.title}>Knowledge Graph</Text>
         <Text style={styles.subtitle}>Concepts and relationships across a pool.</Text>
       </View>
+      <Pressable onPress={onRefresh} disabled={refreshing} hitSlop={10} style={styles.refreshBtn}>
+        <RefreshCw color={colors.inkSoft} size={18} style={refreshing ? { opacity: 0.4 } : undefined} />
+      </Pressable>
     </View>
   )
 }
@@ -204,6 +217,7 @@ const styles = StyleSheet.create({
   headerChip: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: colors.indigoSoft, alignItems: 'center', justifyContent: 'center' },
   title: { fontFamily: fonts.display, fontSize: 22, color: colors.ink },
   subtitle: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
+  refreshBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   // A horizontal ScrollView in a flex column otherwise grows to fill the
   // vertical space (stealing it from the graph) and stretches its chip into a
   // giant pill — pin it to its content height and center the chips.
