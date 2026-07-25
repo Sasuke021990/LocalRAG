@@ -70,6 +70,12 @@ class Config:
     # uploaded images at ingestion time. Only needs to be a model that accepts
     # image_url content — e.g. a VL or OCR model.
     LLM_VISION_MODEL: str = os.getenv('LLM_VISION_MODEL', 'qwen3-vl-2b-instruct')
+    # Optional smaller/faster model (same OpenAI-compatible server) for the
+    # background knowledge-graph extraction pass. That job is structured JSON
+    # extraction, not conversation — it doesn't need the full chat model, and
+    # running it on a big one has caused read timeouts that silently drop a
+    # document's graph data (see task.md §3). Blank = reuse LLM_MODEL.
+    LLM_GRAPH_MODEL: str = os.getenv('LLM_GRAPH_MODEL', '')
     # openai backend only: cap simultaneous in-flight generations from this
     # process to protect the inference server (0 = unlimited).
     LLM_MAX_CONCURRENCY: int = int(os.getenv('LLM_MAX_CONCURRENCY', 8))

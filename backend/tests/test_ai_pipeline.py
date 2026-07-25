@@ -39,20 +39,23 @@ class FakeCache:
 
 class FakeLLM:
     """Streams a canned output; records whether it was called (for gate tests),
-    the last history it was given (for conversational-memory tests), and the
-    last user-turn text (for the thinking-directive tests)."""
+    the last history it was given (for conversational-memory tests), the last
+    user-turn text (for the thinking-directive tests), and the last per-call
+    model override (for the LLM_GRAPH_MODEL tests)."""
     def __init__(self, output="", ready=True):
         self.output = output
         self._ready = ready
         self.called = False
         self.last_history = None
         self.last_user = None
+        self.last_model = "unset"
     @property
     def ready(self): return self._ready
-    async def generate_stream(self, system, user, history=None):
+    async def generate_stream(self, system, user, history=None, model=None):
         self.called = True
         self.last_history = history
         self.last_user = user
+        self.last_model = model
         for tok in self.output:   # yield char by char to exercise streaming
             yield tok
 
