@@ -176,6 +176,7 @@ class DocumentIngestionPipeline:
                     "pool_assigned": data.get("pool_assigned", True),
                     "chunk_count": data.get("chunk_count", 0),
                     "processed_at": data.get("processed_at", ""),
+                    "summary": data.get("summary", ""),
                     "embedding_dimension": (
                         len(data["embeddings"][0])
                         if data.get("embeddings")
@@ -186,6 +187,18 @@ class DocumentIngestionPipeline:
         except Exception as exc:
             logger.error(f"Error listing documents: {exc}")
             return []
+
+    def document_still_at(self, user_id: str, pool: str, file_name: str) -> bool:
+        """
+        True if the document is still stored at exactly ``pool``. Used by
+        callers whose work spans a slow background step (e.g. LLM graph
+        extraction, which can take 10-30s) to detect that the document was
+        moved to a different pool *while that step was running* — a real
+        race: upload -> pool captured -> extraction starts -> user moves the
+        doc -> extraction finishes and would otherwise attach its result to
+        the pool the doc used to be in, not where it actually lives now.
+        """
+        return bool(self.redis_client.exists(f"document:{user_id}:{pool}:{file_name}"))
 
     def delete_document(self, file_name: str, pool: str, user_id: str) -> Optional[int]:
         """
@@ -278,6 +291,37 @@ class DocumentIngestionPipeline:
             logger.error(f"Error moving document '{file_name}': {exc}")
             return None
 
+    def update_document_summary(self, user_id: str, pool: str, file_name: str, summary: str) -> bool:
+        """
+        Attach an AI-generated summary to an already-ingested document
+        (task.md §1d) — a read-modify-write on both the Redis blob and its
+        JSON backup, since the summary is only known after
+        ``process_document`` has already returned and persisted everything
+        else. Mirrors the re-serialize pattern in ``move_document``'s
+        assign-in-place branch. Returns False if the document was deleted
+        (or never existed) by the time the background summary call finished.
+        """
+        try:
+            doc_key = f"document:{user_id}:{pool}:{file_name}"
+            raw = self.redis_client.get(doc_key)
+            if raw is None:
+                return False
+
+            data = json.loads(raw)
+            data["summary"] = summary
+            self.redis_client.set(doc_key, json.dumps(data))
+
+            stem = Path(file_name).stem
+            backup_path = Path(config.DATA_DIR) / user_id / pool / f"{stem}.json"
+            if backup_path.exists():
+                backup_path.write_text(json.dumps(data), encoding="utf-8")
+
+            logger.info(f"Summary stored for '{file_name}' (user {user_id}, pool {pool})")
+            return True
+        except Exception as exc:
+            logger.error(f"Error updating summary for '{file_name}': {exc}")
+            return False
+
     @staticmethod
     def _doc_meta(key: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Public metadata view of a document blob (no chunks/embeddings)."""
@@ -288,6 +332,7 @@ class DocumentIngestionPipeline:
             "pool_assigned": data.get("pool_assigned", True),
             "chunk_count": data.get("chunk_count", 0),
             "processed_at": data.get("processed_at", ""),
+            "summary": data.get("summary", ""),
         }
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -370,6 +415,10 @@ class DocumentIngestionPipeline:
                 "embedding_dimension": len(embeddings[0]) if embeddings else 0,
                 "stored_bytes": stored_bytes,
                 "message": "Document processed and stored successfully",
+                # Chunk text (not embeddings) for the caller's optional
+                # post-ingestion summary pass (task.md §1d) — avoids a second
+                # Redis round-trip to re-fetch what's already in memory here.
+                "chunks": chunks,
             }
 
         except Exception as exc:
@@ -406,6 +455,9 @@ class DocumentIngestionPipeline:
             "embeddings": embeddings,
             "chunk_count": len(chunks),
             "processed_at": datetime.now().isoformat(),
+            # Populated later by update_document_summary() — ingestion itself
+            # doesn't wait on an LLM call (task.md §1d).
+            "summary": "",
         }
         self.redis_client.set(doc_key, json.dumps(data))
 
@@ -450,6 +502,7 @@ class DocumentIngestionPipeline:
             "embeddings": embeddings,
             "chunk_count": len(chunks),
             "processed_at": datetime.now().isoformat(),
+            "summary": "",
         }
         with open(backup_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh)

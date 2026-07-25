@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from auth import store
 from utils import quota
+from utils.config import config
 
 USER_ID = "user-quota-test"
 
@@ -85,11 +86,15 @@ class TestAiQuestionQuota:
         assert exc_info.value.status_code == 429
 
     def test_limit_follows_plan(self, redis_client, user):
+        # Values are env-configurable — assert against config, not a
+        # hardcoded number that drifts whenever a deployment tunes its
+        # plan quotas (see test_billing.py's TestPlanCatalog for the same
+        # rationale).
         from billing import store as billing_store
         billing_store.set_plan(redis_client, user, "pro")
-        assert quota.ai_questions_limit(redis_client, user) == 25
+        assert quota.ai_questions_limit(redis_client, user) == config.PRO_AI_QUESTIONS_PER_DAY
         billing_store.set_plan(redis_client, user, "max")
-        assert quota.ai_questions_limit(redis_client, user) == 30
+        assert quota.ai_questions_limit(redis_client, user) == config.MAX_AI_QUESTIONS_PER_DAY_PER_USER
 
     def test_admin_is_exempt_from_limit(self, redis_client, user):
         from auth import store as auth_store

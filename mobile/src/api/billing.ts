@@ -8,6 +8,7 @@ export interface PlanFeatures {
   api_tokens: boolean
   webhooks: boolean
   priority_processing: boolean
+  knowledge_graph: boolean
   team_members: number | null
 }
 

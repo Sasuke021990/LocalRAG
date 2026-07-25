@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { View, Text, StyleSheet, Alert, Pressable, Modal, TextInput } from 'react-native'
+import { useQueryClient } from '@tanstack/react-query'
 import { Check } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
@@ -22,7 +23,7 @@ function featureList(p: Plan): string[] {
   const items = [`${p.storage_gb} GB storage`]
   if (f.pools) items.push('Unlimited pools')
   if (f.hybrid_chat) items.push('Hybrid search + chat')
-  if (f.api_tokens) items.push('API token access')
+  if (f.api_tokens) items.push('Unlimited API/MCP tokens')
   if (f.webhooks) items.push('Webhooks')
   if (f.priority_processing) items.push('Priority processing')
   if (f.team_members) items.push(`Team sharing (up to ${f.team_members})`)
@@ -45,6 +46,7 @@ interface Card_ {
 }
 
 export default function BillingScreen() {
+  const qc = useQueryClient()
   const plan = useUsageStore((s) => s.plan)
   const user = useAuthStore((s) => s.user)
   const refresh = useAuthStore((s) => s.refresh)
@@ -81,6 +83,10 @@ export default function BillingScreen() {
       else await billingApi.checkout(planId)
       await refresh()
       billingApi.fetchSubscription().then(setSub).catch(() => {})
+      // Other screens (e.g. the Graph tab's plan gate) read the subscription
+      // via React Query — drop their cached copy so the plan change is seen
+      // immediately, not just here on the Billing screen.
+      qc.invalidateQueries({ queryKey: ['subscription'] })
       const name = cards.find((p) => p.id === planId)?.name ?? planId
       Alert.alert(planId === 'free' ? 'Switched to Free' : `You're now on ${name}`)
     } catch (err: any) {
@@ -156,15 +162,21 @@ export default function BillingScreen() {
             <Text style={styles.planName}>{p.name}</Text>
             {p.highlight ? <Badge label="Popular" color="pink" /> : p.contactOnly ? <Badge label="Enterprise" color="indigo" /> : null}
           </View>
-          <Text style={styles.price}>{p.price}<Text style={styles.per}> / {p.period}</Text></Text>
-          <View style={{ gap: 6, marginVertical: 12 }}>
-            {p.features.map((f) => (
-              <View key={f} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Check color={colors.emerald} size={15} />
-                <Text style={styles.feature}>{f}</Text>
+          {p.contactOnly ? (
+            <Text style={[styles.price, { marginVertical: 12 }]}>{p.price}</Text>
+          ) : (
+            <>
+              <Text style={styles.price}>{p.price}<Text style={styles.per}> / {p.period}</Text></Text>
+              <View style={{ gap: 6, marginVertical: 12 }}>
+                {p.features.map((f) => (
+                  <View key={f} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Check color={colors.emerald} size={15} />
+                    <Text style={styles.feature}>{f}</Text>
+                  </View>
+                ))}
               </View>
-            ))}
-          </View>
+            </>
+          )}
           {p.contactOnly
             ? <Button title="Contact us" variant="secondary" onPress={openContact} />
             : p.id === plan

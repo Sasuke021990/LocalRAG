@@ -15,6 +15,7 @@ defineEmits(['move', 'delete'])
         {{ document.chunk_count }} chunks
         <span v-if="document.pool_assigned === false" class="text-amber font-semibold">· needs a pool</span>
       </p>
+      <p v-if="document.summary" class="text-xs text-ink-muted mt-0.5 line-clamp-2">{{ document.summary }}</p>
     </div>
     <button class="text-ink-muted hover:text-indigo transition-colors cursor-pointer p-1.5" title="Move to another pool" @click="$emit('move', document)">
       <FolderInput class="w-4 h-4" />

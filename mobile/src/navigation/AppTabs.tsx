@@ -1,10 +1,11 @@
 import React from 'react'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
-import { Home, MessageSquare, FolderOpen, Settings } from 'lucide-react-native'
+import { Home, MessageSquare, FolderOpen, Share2, Settings } from 'lucide-react-native'
 import { colors, fonts } from '../theme/tokens'
 import HomeScreen from '../screens/HomeScreen'
 import ChatScreen from '../screens/ChatScreen'
 import KnowledgeScreen from '../screens/KnowledgeScreen'
+import KnowledgeGraphScreen from '../screens/KnowledgeGraphScreen'
 import SettingsScreen from '../screens/SettingsScreen'
 
 const Tab = createBottomTabNavigator()
@@ -23,6 +24,7 @@ export default function AppTabs() {
       <Tab.Screen name="Home" component={HomeScreen} options={{ tabBarIcon: ({ color, size }) => <Home color={color} size={size} /> }} />
       <Tab.Screen name="Chat" component={ChatScreen} options={{ tabBarIcon: ({ color, size }) => <MessageSquare color={color} size={size} /> }} />
       <Tab.Screen name="Knowledge" component={KnowledgeScreen} options={{ tabBarIcon: ({ color, size }) => <FolderOpen color={color} size={size} /> }} />
+      <Tab.Screen name="Graph" component={KnowledgeGraphScreen} options={{ tabBarIcon: ({ color, size }) => <Share2 color={color} size={size} /> }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{ tabBarIcon: ({ color, size }) => <Settings color={color} size={size} /> }} />
     </Tab.Navigator>
   )

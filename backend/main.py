@@ -41,6 +41,7 @@ from chat import routes as chat_routes
 from chat import store as chat_store
 from integrations import routes as integrations_routes
 from integrations import webhooks
+from knowledge_graph import store as graph_store
 from generation import pipeline as answer_pipeline
 from generation.llm import llm as local_llm
 from ingestion.pipeline import DocumentIngestionPipeline
@@ -381,6 +382,9 @@ async def delete_document(
         hybrid_search.invalidate_bm25(user_id)
         # Drop cached answers — they may cite the now-deleted document.
         semantic_cache.clear_cache(user_id)
+        # Strip this document from the pool's knowledge graph — nodes/edges it
+        # solely backed are removed, shared ones are kept (task.md §1a).
+        graph_store.remove_document(ingestion_pipeline.redis_client, user_id, pool, file_name)
         background_tasks.add_task(
             webhooks.dispatch_event,
             auth_redis_client,
@@ -416,7 +420,36 @@ async def move_document(
     hybrid_search.invalidate_bm25(user_id)
     # A moved doc changes which pool-scoped searches surface it — drop cached answers.
     semantic_cache.clear_cache(user_id)
+    # The knowledge graph is per-pool and we don't re-extract on a move, so
+    # strip the doc's contributions from the source pool's graph to avoid
+    # leaving nodes/edges tagged to a document that's no longer there. Its
+    # concepts won't appear in the destination pool's graph until it's
+    # re-uploaded (task.md §1a: no backfill).
+    if new_pool != request.current_pool:
+        graph_store.remove_document(ingestion_pipeline.redis_client, user_id, request.current_pool, file_name)
     return {"status": "moved", "document": meta}
+
+
+# ─── Knowledge graph ────────────────────────────────────────────────────────────
+
+@app.get("/pools/{pool}/graph", tags=["Pools"], summary="Concept graph for a pool")
+async def pool_graph(pool: str, user_id: str = Depends(require_current_user)):
+    """
+    Nodes (concepts/entities) and edges (relationships) extracted from the
+    documents in ``pool`` — a background LLM pass builds this at upload time
+    (task.md §1a). A **Pro+ feature**: Free-tier users get 403 (the UI shows a
+    faded/locked view and an upgrade prompt instead of calling this).
+
+    Only documents uploaded *after* this feature shipped have graph data — there
+    is no retroactive backfill, so an older pool returns an empty graph.
+    """
+    if not billing_plans.has_feature(billing_store.get_plan(auth_redis_client, user_id), "knowledge_graph"):
+        raise HTTPException(status_code=403, detail="The knowledge graph is available on Pro and above.")
+    safe_pool = _sanitize_pool_name(pool) or "General"
+    try:
+        return graph_store.get_pool_graph(ingestion_pipeline.redis_client, user_id, safe_pool)
+    except Exception as exc:
+        raise _internal_error(exc, "Failed to load knowledge graph")
 
 
 # ─── Upload ───────────────────────────────────────────────────────────────────
@@ -491,6 +524,14 @@ async def upload_document(
         task_id = uuid.uuid4().hex
         upload_progress.set_progress(auth_redis_client, task_id, user_id, 0, "Queued for processing…")
 
+        # Captured on the request's own event loop so _process() (which runs
+        # in a worker thread, see below) can safely hand the summary call
+        # back to *this* loop via run_coroutine_threadsafe — asyncio.run()
+        # in the worker thread would spin up a second loop, which the
+        # embedded LLM backend's asyncio.Lock (bound to whichever loop first
+        # acquires it) can't safely be used from.
+        main_loop = asyncio.get_running_loop()
+
         # Queue background processing
         # NOTE: Plain `def` (not `async def`) so FastAPI routes this to a
         # threadpool executor — keeping the asyncio event loop free for other
@@ -543,6 +584,47 @@ async def upload_document(
                         {"file_name": safe_filename, "pool": safe_pool,
                          "pool_assigned": pool_explicitly_selected, "chunk_count": result["total_chunks"]},
                     )
+
+                    # Best-effort AI summary, after the upload is already
+                    # marked complete — a slow/unavailable LLM must never
+                    # retroactively fail an otherwise-successful upload
+                    # (task.md §1d).
+                    try:
+                        if result.get("chunks"):
+                            future = asyncio.run_coroutine_threadsafe(
+                                answer_pipeline.summarize_document(result["chunks"], local_llm),
+                                main_loop,
+                            )
+                            summary = future.result(timeout=120)
+                            if summary:
+                                ingestion_pipeline.update_document_summary(
+                                    user_id, safe_pool, safe_filename, summary,
+                                )
+                    except Exception as exc:
+                        logger.warning(f"Summary generation failed for '{safe_filename}': {exc}")
+
+                    # Best-effort knowledge-graph extraction, same decoupled
+                    # background pattern as the summary above — a failure here
+                    # never affects the completed upload (task.md §1a).
+                    try:
+                        if result.get("chunks"):
+                            future = asyncio.run_coroutine_threadsafe(
+                                answer_pipeline.extract_graph_elements(result["chunks"], local_llm),
+                                main_loop,
+                            )
+                            nodes, edges = future.result(timeout=120)
+                            # Guard against the doc having been moved to a
+                            # different pool while extraction (a slow LLM
+                            # call) was still running — merging into the
+                            # stale captured `safe_pool` would silently
+                            # attach this graph data to the wrong pool.
+                            if (nodes or edges) and ingestion_pipeline.document_still_at(user_id, safe_pool, safe_filename):
+                                graph_store.merge_document(
+                                    ingestion_pipeline.redis_client,
+                                    user_id, safe_pool, safe_filename, nodes, edges,
+                                )
+                    except Exception as exc:
+                        logger.warning(f"Graph extraction failed for '{safe_filename}': {exc}")
             except Exception as exc:
                 logger.error(f"Background processing failed for '{safe_filename}': {exc}")
                 upload_progress.set_progress(

@@ -5,7 +5,7 @@ import { useAuthStore } from '../stores/auth.js'
 import PlanBadge from './PlanBadge.vue'
 import Modal from './ui/Modal.vue'
 import Button from './ui/Button.vue'
-import { Vault, LayoutDashboard, MessageSquare, Database, CreditCard, Settings, ShieldCheck, LogOut, Menu, X } from 'lucide-vue-next'
+import { Vault, LayoutDashboard, MessageSquare, Database, Share2, CreditCard, Settings, ShieldCheck, LogOut, Menu, X } from 'lucide-vue-next'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -15,6 +15,7 @@ const links = computed(() => [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/knowledge-base', label: 'Knowledge Base', icon: Database },
+  { to: '/knowledge-graph', label: 'Knowledge Graph', icon: Share2 },
   { to: '/billing', label: 'Billing', icon: CreditCard },
   { to: '/settings', label: 'Settings', icon: Settings },
   ...(auth.user?.is_admin ? [{ to: '/admin', label: 'Admin', icon: ShieldCheck }] : []),
