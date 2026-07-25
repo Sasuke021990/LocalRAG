@@ -35,17 +35,16 @@ Full read-through of all 41 mobile source files (~3,400 lines) plus a systematic
 - [x] **6. App icon / splash / assets / eas.json — FIXED.** Generated real on-brand assets (`mobile/assets/icon.png`, `adaptive-icon.png`, `splash.png`) matching the exact indigo→pink gradient + vault/padlock glyph already used in the app's own `Wordmark.tsx` — not generic placeholders. Wired into `app.json` (`icon`, `splash.image`, `android.adaptiveIcon.foregroundImage` + a proper solid `backgroundColor` for contrast, plus `ios.buildNumber`/`android.versionCode`). New `eas.json` with standard development/preview/production build profiles. Also fixed an unrelated-but-real `expo-doctor` finding along the way: `react-native-reanimated`'s missing `react-native-worklets` peer dependency (could crash a real, non-Expo-Go build) — installed. `expo-doctor`: **18/18 checks passing** (was 17/18 before the peer-dep fix).
 - [x] **Verification across all 6**: mobile Jest suite 21/21 passing, `tsc --noEmit` clean, full `expo export` bundle succeeds, `expo-doctor` 18/18. Backend suite 461/461 passing. **Not yet re-tested on a physical device** — all verified via typecheck/tests/bundle/live-curl against the rebuilt backend, not an actual Expo Go session. Do a real device pass before calling Phase 1 fully done.
 
-### 🟠 P1 — Broken or misleading
+### 🟠 P1 — Broken or misleading — **8 of 9 FIXED (2026-07-25, "Phase 2")**
 
-- [ ] **7. Logout never calls the backend.** `authStore.logout()` only clears the local SecureStore token — it never hits an equivalent of the web's logout, so the L3 JWT-blacklist fix (session revocation on logout) is bypassed entirely on mobile; a "logged out" token stays valid until natural expiry.
-- [ ] **8. Streaming never actually streams on-device.** React Native's `fetch` doesn't expose a readable `body.getReader()`, so `streamQuery` (`api/query.ts:60-61`) **always** silently falls into `fallback()` — it waits for the *entire* answer to arrive, then fake-types it back at ~30ms/word. A 500-word answer adds roughly 15 seconds of artificial delay after the real answer already arrived.
-- [ ] **9. `res.ok` is never checked in the streaming fallback path.** `query.ts:59` — a 429 (quota) or 403 response falls through into `fallback()`, which throws, which is caught by the same silent `onError` from #1 → empty bubble, no indication it was a quota/permission issue specifically.
-- [ ] **10. No pull-to-refresh anywhere except Admin.** `Screen.tsx` (the shared screen wrapper) has no `RefreshControl` — Home, Knowledge, Graph, and Billing can't be refreshed with the universal mobile gesture.
-- [ ] **11. Document summaries and graph data never auto-appear after upload.** They land 20-30s post-upload via the background pass (§1a/§1d); nothing re-fetches automatically. A user watches the progress bar finish, sees no summary, and reasonably assumes it failed.
-- [ ] **12. No error boundary anywhere in the app.** One render-time error in any screen = permanent white screen, no recovery path.
-- [ ] **13. No offline/network-loss handling.** Airplane mode produces the exact same silent nothing as every other kind of failure (feeds into the P0/P1 silent-failure pattern below).
-- [ ] **14. No dark mode.** `app.json` hardcodes `"userInterfaceStyle": "light"`; every design token in `theme/tokens.ts` is light-only. Widely expected by users in 2026; also directly hurts the "attractive" goal.
-- [ ] **15. Move/delete touch targets are too small and sit adjacent.** The `FolderInput`/`Trash2` icons added to `DocumentRow`/pool rows are ~18px with no larger hit area, and the destructive delete action sits right next to the harmless move action — easy to mis-tap.
+- [x] **7. Logout never calls the backend — FIXED.** New `authApi.logout()` (`POST /auth/logout`) wired into `authStore.logout()`, wrapped in try/catch so a network failure or already-revoked token never blocks the always-must-succeed local logout (clearing token + user state). Live-verified against Docker: a subsequent `/auth/me` with the same token now returns "Session revoked". 2 tests in `authStore.test.ts` (success path + offline-still-succeeds regression).
+- [x] **8+9. Streaming never actually streamed + `res.ok` never checked — both FIXED.** `query.ts`'s `streamQuery()` now uses `expo/fetch` (a genuine native-backed `ReadableStream`, unlike RN's built-in global `fetch`) instead of always falling into the fake ~30ms/word typewriter fallback. A non-ok response (429/403/etc.) is now checked explicitly before treating the body as an SSE stream, and reaches `onError` directly — never silently retried through `fallback()` (which risked double-consuming the daily AI-question quota). 6 new tests in `query.test.ts` covering real streaming, a non-ok response, a mid-stream break, no readable body, a network-level failure, and a fallback-path failure.
+- [x] **10. No pull-to-refresh anywhere except Admin — FIXED.** `Screen.tsx` gained optional `refreshing`/`onRefresh` props wired to a `RefreshControl` inside its `ScrollView`. Applied to Home, Knowledge, Billing (all three via the shared `Screen`), Conversations (via `FlatList`'s own built-in `refreshing`/`onRefresh`), and Knowledge Graph — which uses `scroll={false}` for its fixed WebView layout, so it gets a manual refresh button (`RefreshCw` icon in the header) instead. Settings and Chat intentionally skipped — neither holds refreshable list/query data.
+- [x] **11. Document summaries and graph data never auto-appear after upload — FIXED.** Home and Knowledge now `useFocusEffect` to refetch documents/pools whenever the screen regains focus (bottom-tab screens stay mounted, so returning from elsewhere didn't refetch on its own); Knowledge Graph already had equivalent focus-refetch logic for its pool list/graph/subscription queries from earlier work.
+- [x] **12. No error boundary anywhere — FIXED.** New class component `components/ErrorBoundary.tsx` (`getDerivedStateFromError`/`componentDidCatch`) wraps the whole app in `App.tsx`, rendering a "Something went wrong" screen with a "Try again" reset button instead of a permanent white screen. 3 tests in `ErrorBoundary.test.tsx`.
+- [x] **13. No offline/network-loss handling — FIXED.** Added `@react-native-community/netinfo` (Expo Go-compatible) and a new `components/OfflineBanner.tsx` — a persistent "You're offline" strip shown app-wide (absolutely positioned overlay, so it never double-applies the top safe-area inset each screen's own `SafeAreaView` already accounts for) whenever `isConnected === false`. Wired into `App.tsx` alongside the error boundary. 3 tests in `OfflineBanner.test.tsx`.
+- [ ] **14. No dark mode — DEFERRED to Phase 3.** `app.json` still hardcodes `"userInterfaceStyle": "light"`; every design token in `theme/tokens.ts` is light-only. Confirmed out of scope for Phase 2: 27 files import the static `colors` object directly into module-scope `StyleSheet.create()` calls, so real dark-mode support needs a `ThemeProvider`/`useThemeColors()` refactor touching all of them — a Phase 3-sized change, which matches where the original roadmap (below) already placed it.
+- [x] **15. Move/delete touch targets too small and sat adjacent — FIXED.** `DocumentRow`'s move button and `KnowledgeScreen`'s per-document/per-pool delete buttons now have real 40x40 tap targets (not just `hitSlop`), the move/delete pair has 14px of separation instead of ~8px, and delete icons are now rose-colored to read as destructive rather than neutral gray.
 
 ### 🟡 P2 — Polish / "addictive" gaps
 
@@ -81,7 +80,7 @@ Traced all 34 call sites across `stores/`, `screens/`, and `components/` for try
 **Root cause, app-wide:** there is no shared failure path. Three structural pieces are missing:
 - [ ] No global 401 interceptor (→ P0 #3)
 - [ ] No `QueryClient` global `onError`/`retry` config — `App.tsx:19` is a bare `new QueryClient()`
-- [ ] No error boundary (→ P1 #12)
+- [x] No error boundary (→ P1 #12, fixed in Phase 2)
 
 ### Infrastructure gaps for already-planned features
 
@@ -93,8 +92,8 @@ Traced all 34 call sites across `stores/`, `screens/`, and `components/` for try
 ### Recommended order
 
 1. ✅ **Phase 1 — stop the bleeding (P0 items 1-6) — DONE 2026-07-25.** Chat error surfacing → global 401 handling → password-change session break → account deletion → hide the Google button → app icon/splash/`assets/`/`eas.json`. See the P0 section above for what actually landed for each.
-2. **Phase 2 — trust (P1 items 7-15) — not started.** Logout hits the backend → fix `res.ok` handling → pull-to-refresh everywhere → auto-refresh after upload → error boundary → offline handling.
-3. **Phase 3 — delight (P2 items 16-23) — not started.** Animations → dark mode → haptics → chat message actions → bigger touch targets → quota visibility → accessibility labels.
+2. ✅ **Phase 2 — trust (P1 items 7-13, 15) — DONE 2026-07-25.** Logout hits the backend → real streaming + `res.ok` handling → pull-to-refresh everywhere → auto-refresh after upload → error boundary → offline handling → bigger touch targets. Item 14 (dark mode) deliberately deferred — see P1 section above. Mobile Jest suite 34/34 passing, `tsc --noEmit` clean.
+3. **Phase 3 — delight (P2 items 14, 16-23) — not started.** Dark mode → animations → haptics → chat message actions → quota visibility → accessibility labels.
 
 ---
 

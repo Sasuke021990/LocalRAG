@@ -1,3 +1,4 @@
+import { fetch as expoFetch } from 'expo/fetch'
 import { request, jsonBody, getToken, API_BASE } from './client'
 
 export interface Source { file_name: string; pool: string; chunk_index: number; score: number; content: string }
@@ -36,24 +37,28 @@ export interface StreamOptions {
 }
 
 /**
- * Attempt real SSE streaming; if the RN runtime doesn't expose a readable
- * response body, fall back to the plain /query endpoint and reveal the answer
- * word-by-word (~35ms/word) — visually similar, fully reliable on-device.
- * `onDone`'s payload includes `conversation_id` — new if `conversationId` was
- * blank (a fresh conversation was created), otherwise the one passed in.
+ * Attempt real SSE streaming via `expo/fetch` — unlike React Native's global
+ * `fetch`, Expo's fetch (SDK 51+) exposes a genuine readable `response.body`,
+ * so this actually streams token-by-token instead of always silently
+ * falling back to a fake typewriter reveal. If it's ever unavailable for any
+ * reason (older Expo Go client, web, etc.), falls back to the plain /query
+ * endpoint and reveals the answer word-by-word — visually similar, fully
+ * reliable either way. `onDone`'s payload includes `conversation_id` — new
+ * if `conversationId` was blank (a fresh conversation was created),
+ * otherwise the one passed in.
  */
 export async function streamQuery(query: string, opts: StreamOptions = {}, h: StreamHandlers = {}) {
   const { topK = 10, rerankTopK = 5, pool = '', conversationId = '' } = opts
 
   // Whether the initial streaming attempt got far enough that a failure
   // from here on is a genuine backend error (bad response, quota, etc.)
-  // rather than "this RN runtime just doesn't support readable streams" —
-  // in the latter case we want to try the fallback path once, not report
-  // an error before even attempting it.
+  // rather than "this runtime doesn't support readable streams" — in the
+  // latter case we want to try the fallback path once, not report an error
+  // before even attempting it.
   let reader: any
   try {
     const token = await getToken()
-    const res = await fetch(`${API_BASE}/query/stream`, {
+    const res = await expoFetch(`${API_BASE}/query/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -64,14 +69,24 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
         pool: pool || null, conversation_id: conversationId || null,
       }),
     })
+    if (!res.ok) {
+      // A real backend error (quota exceeded, server error, etc.) — the
+      // body is a plain JSON error, not an SSE stream, so read it as such
+      // and surface it directly rather than misreading it as stream frames
+      // or silently retrying the same failing request a second time.
+      let detail = `HTTP ${res.status}`
+      try { detail = (await res.json())?.detail || detail } catch { /* non-JSON error body */ }
+      throw Object.assign(new Error(detail), { status: res.status })
+    }
     reader = (res as any).body?.getReader?.()
-  } catch {
+  } catch (err: any) {
+    if (err?.status) { h.onError?.(err); return } // real HTTP error — already reported, don't fall back
     reader = undefined // network-level failure before we even got a response — fall back
   }
 
   if (!reader) {
-    // No readable stream support on this RN runtime (the common case) or the
-    // initial request itself failed outright — either way, try exactly once
+    // No readable stream support on this runtime, or the initial request
+    // itself failed at the network level — either way, try exactly once
     // more via the plain /query endpoint. A failure here is real and must
     // reach onError, not be silently retried again.
     try { await fallback(query, topK, rerankTopK, pool, conversationId, h) }

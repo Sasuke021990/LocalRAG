@@ -22,6 +22,12 @@ export const login = (identifier: string, password: string) =>
 
 export const getCurrentUser = () => request<User>('/auth/me')
 
+// Revokes the presented token server-side via a jti blacklist (see
+// backend/auth/session_blacklist.py) -- without this call, a "logged out"
+// mobile token stayed valid until its natural expiry, unlike web (which
+// already calls this same endpoint on logout).
+export const logout = () => request('/auth/logout', { method: 'POST' })
+
 export const googleTokenExchange = (code: string) =>
   request<User>('/auth/google/token-exchange', jsonBody('POST', { code }))
 

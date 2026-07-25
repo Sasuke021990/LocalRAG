@@ -55,11 +55,22 @@ export default function BillingScreen() {
   const [sub, setSub] = useState<Subscription | null>(null)
   const [billed, setBilled] = useState<'monthly' | 'annual'>('monthly')
   const [busy, setBusy] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
-    billingApi.fetchPlans().then((r) => setRawPlans(r.plans || [])).catch(() => {})
-    billingApi.fetchSubscription().then(setSub).catch(() => {})
-  }, [])
+  function loadData() {
+    return Promise.all([
+      billingApi.fetchPlans().then((r) => setRawPlans(r.plans || [])).catch(() => {}),
+      billingApi.fetchSubscription().then(setSub).catch(() => {}),
+    ])
+  }
+
+  useEffect(() => { loadData() }, [])
+
+  async function onRefresh() {
+    setRefreshing(true)
+    await loadData()
+    setRefreshing(false)
+  }
 
   const cards: Card_[] = useMemo(() => rawPlans.map((p) => {
     const price = p.contact_only
@@ -130,7 +141,7 @@ export default function BillingScreen() {
   }
 
   return (
-    <Screen>
+    <Screen refreshing={refreshing} onRefresh={onRefresh}>
       <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
         <UsageRing size={110} stroke={10} />
         <View style={{ flex: 1 }}>

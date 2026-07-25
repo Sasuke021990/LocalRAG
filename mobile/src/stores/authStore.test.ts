@@ -6,6 +6,7 @@ jest.mock('../api/auth', () => ({
   getCurrentUser: jest.fn(),
   googleTokenExchange: jest.fn(),
   deleteAccount: jest.fn(),
+  logout: jest.fn(),
 }))
 jest.mock('../api/client', () => ({
   setToken: jest.fn(),
@@ -45,8 +46,21 @@ test('login accepts a username as the identifier too', async () => {
   expect(useAuthStore.getState().user?.username).toBe('alice')
 })
 
-test('logout clears user + token', async () => {
+test('logout revokes the token server-side, then clears user + local token', async () => {
   useAuthStore.setState({ user: USER as any, checked: true })
+  ;(authApi.logout as jest.Mock).mockResolvedValue({ status: 'logged_out' })
+  await useAuthStore.getState().logout()
+  expect(authApi.logout).toHaveBeenCalled()
+  expect(useAuthStore.getState().user).toBeNull()
+  expect(clearToken).toHaveBeenCalled()
+})
+
+// Regression test: logout must never get stuck (or leave the user stuck
+// mid-session) just because the device is offline or the token was already
+// revoked -- the local logout always has to succeed.
+test('logout still clears user + token even if the backend call fails', async () => {
+  useAuthStore.setState({ user: USER as any, checked: true })
+  ;(authApi.logout as jest.Mock).mockRejectedValue(new Error('Network request failed'))
   await useAuthStore.getState().logout()
   expect(useAuthStore.getState().user).toBeNull()
   expect(clearToken).toHaveBeenCalled()
