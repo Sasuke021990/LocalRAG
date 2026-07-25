@@ -390,10 +390,13 @@ class DocumentIngestionPipeline:
             embeddings = self._generate_embeddings(chunks, progress_callback)
             _cb(progress_callback, 70, "Embeddings generated ✓")
 
-            # 4a. Store in Redis
-            self._store_in_redis(file_path, chunks, embeddings, pool, user_id, pool_assigned)
+            # 4a. Store in Redis (reports 70→85 for a large document)
+            self._store_in_redis(file_path, chunks, embeddings, pool, user_id, pool_assigned, progress_callback)
 
-            # 4b. Save JSON backup to disk (durability)
+            # 4b. Save JSON backup to disk (durability). Serializing every
+            # embedding is slow enough to be worth announcing on its own —
+            # it's tens of MB of JSON for a few thousand chunks.
+            _cb(progress_callback, 85, "Writing backup…")
             stored_bytes = self._save_json_backup(file_path, chunks, embeddings, pool, user_id, pool_assigned)
             _cb(progress_callback, 90, "Stored in Redis + JSON backup ✓")
 
@@ -442,8 +445,17 @@ class DocumentIngestionPipeline:
         pool: str,
         user_id: str,
         pool_assigned: bool = True,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
     ) -> None:
-        """Write document data to Redis under ``document:<user_id>:<pool>:<filename>``."""
+        """
+        Write document data to Redis under ``document:<user_id>:<pool>:<filename>``.
+
+        Reports progress between 70% and 85% of the overall pipeline. The
+        per-chunk vector writes are pipelined: previously each chunk cost a
+        separate round trip, so a few thousand chunks meant a few thousand
+        sequential RTTs with no progress reported the whole time — the bar
+        sat frozen right after embedding while this ran.
+        """
         file_name = Path(file_path).name
         doc_key = f"document:{user_id}:{pool}:{file_name}"
         data = {
@@ -461,8 +473,20 @@ class DocumentIngestionPipeline:
         }
         self.redis_client.set(doc_key, json.dumps(data))
 
-        for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-            vector_index.index_chunk(self.redis_client, user_id, pool, file_name, i, chunk_text, embedding)
+        # transaction=False: these are independent idempotent HSETs, so they
+        # only need batching for round-trip efficiency, not MULTI/EXEC atomicity.
+        BATCH = 500
+        total = len(chunks)
+        for start in range(0, total, BATCH):
+            stop = min(start + BATCH, total)
+            pipe = self.redis_client.pipeline(transaction=False)
+            for i in range(start, stop):
+                # A Pipeline exposes the same .hset as a client, so index_chunk
+                # queues onto it unchanged rather than executing immediately.
+                vector_index.index_chunk(pipe, user_id, pool, file_name, i, chunks[i], embeddings[i])
+            pipe.execute()
+            if total > BATCH:
+                _cb(progress_callback, 70 + int(15 * stop / total), f"Indexing chunks {stop}/{total}…")
 
         logger.info(f"Stored in Redis: {doc_key} ({len(chunks)} chunks, vector-indexed)")
 

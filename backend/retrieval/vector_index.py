@@ -98,7 +98,7 @@ def ensure_index(redis_client: Redis, dim: int = EMBEDDING_DIM) -> None:
 
 
 def index_chunk(
-    redis_client: Redis,
+    redis_client,
     user_id: str,
     pool: str,
     file_name: str,
@@ -106,7 +106,15 @@ def index_chunk(
     content: str,
     embedding: List[float],
 ) -> None:
-    """Write/overwrite one chunk HASH. Idempotent — safe to call repeatedly (e.g. on reindex)."""
+    """
+    Write/overwrite one chunk HASH. Idempotent — safe to call repeatedly
+    (e.g. on reindex).
+
+    ``redis_client`` may be either a ``Redis`` client or a ``Pipeline``;
+    both expose ``hset``, so passing a pipeline queues the write instead of
+    executing it, letting callers batch thousands of chunks into a few round
+    trips (see ``ingestion.pipeline._store_in_redis``).
+    """
     key = chunk_key(user_id, pool, file_name, chunk_index)
     vector_bytes = np.array(embedding, dtype=np.float32).tobytes()
     redis_client.hset(
