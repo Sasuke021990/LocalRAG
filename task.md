@@ -8,6 +8,17 @@
 >
 > **Housekeeping reminder**: `mobile/app.json`'s `apiBaseUrl` is currently pointed at a local LAN IP (`http://192.168.1.6:8000`) for live device testing against the dev Docker backend, and is **deliberately left uncommitted** so the in-progress test session isn't broken by a revert. **Must be reverted to `https://api.vaultly.app` before it's committed or any build is shipped.**
 
+## Security fix — stored XSS in mobile Knowledge Graph WebView (2026-07-25) — **FIXED**
+
+Found during a full security review against a comprehensive checklist (auth, secrets, network, input validation, Android config, performance, privacy). Full findings below the fix.
+
+- [x] **Vulnerability**: `mobile/src/components/graphHtml.ts` embedded `JSON.stringify(graphData)` raw into a `<script>` tag (`var DATA = ${payload};`). `JSON.stringify` doesn't escape `/`, and node/edge labels come from LLM extraction over uploaded-document content (`backend/generation/pipeline.py::extract_graph_elements`) with **no character filtering** before storage. A label containing literal `</script>` (via an adversarial document or a prompt-injected extraction) would close the script tag early and inject arbitrary HTML/script into the WebView — a stored XSS with network egress (no CSP existed, `WebView` had `originWhitelist={['*']}`, no `onMessage` bridge to native code so it couldn't escalate to the app itself, but could exfiltrate anything visible in-WebView or redirect to a phishing page).
+- [x] **Fix**: every `<` character in the stringified payload is now escaped to its JS unicode-escape form before interpolation (neutralizes `</script>` and any other tag while round-tripping to the exact same JS value at parse time — see `graphHtml.ts`'s `.replace(/</g, ...)` call). Added a `Content-Security-Policy` meta tag (`default-src 'none'`) as defense-in-depth — can't block the legitimate inline script itself (`'unsafe-inline'` needed, no per-render nonce), but blocks `connect-src`/`img-src`/`frame-src` so even a future escaping regression can't exfiltrate or navigate away.
+- [x] 4 new tests in `graphHtml.test.ts` (new file) — confirms exactly one legitimate `</script>` survives a malicious label, confirms the escaped payload round-trips to the identical original label via `eval`, confirms benign labels are unaffected, confirms the CSP tag is present. Full mobile suite: 14/14 passing. `tsc --noEmit` clean, full `expo export` bundle succeeds.
+- [x] **Not device-verified** — fix is unit-tested and bundle-verified but hasn't been re-opened on a physical device yet since landing.
+
+**Everything else checked in the same review came back either already-sound** (JWT `HS256` pinned on encode+decode, bcrypt hashing, session/token revocation via `token_version`+`jti` blacklist, admin routes session-only, mobile token in `expo-secure-store` not `AsyncStorage`, zero hardcoded secrets, zero `console.*` calls anywhere in mobile source, no native `android/`/`ios/` dirs yet so manifest/exported-component/ProGuard/backup-config items are N/A until `expo prebuild`) **or already tracked** in the mobile launch-readiness audit above (mobile logout not hitting the backend, no account deletion, Google Sign-In hidden for v1, no biometric auth, no cert pinning) — not re-listed here to avoid duplication.
+
 ---
 
 ## Mobile launch-readiness audit (2026-07-25) — analysis only, nothing implemented

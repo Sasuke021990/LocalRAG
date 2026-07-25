@@ -20,12 +20,30 @@ import type { PoolGraph } from '../api/documents'
  * two-finger pinch-to-zoom, mirroring the web page's scroll-to-zoom + drag.
  */
 export function graphHtml(graph: PoolGraph, repulsion: number, initialFocus = ''): string {
+  // Node/edge labels come from LLM extraction over uploaded-document content
+  // (backend/generation/pipeline.py::extract_graph_elements) with no
+  // character filtering server-side -- an adversarial document (or a
+  // prompt-injected extraction) could make a label contain literal
+  // "</script>". JSON.stringify does NOT escape "/", so embedding it
+  // unescaped into a <script> tag would let that string prematurely close
+  // the tag and inject arbitrary HTML/script into the WebView. Escaping "<"
+  // to its unicode form neutralizes "</script>" (and any other tag) while
+  // still parsing back to the exact same JS value via JSON.parse/eval.
   const payload = JSON.stringify({ nodes: graph.nodes, edges: graph.edges, repulsion, focus: initialFocus || null })
+    .replace(/</g, '\\u003c')
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<!-- Defense-in-depth: 'unsafe-inline' script-src can't be tightened further
+     without a per-render nonce (the legitimate script above needs to run
+     inline), so this can't block script execution outright. What it does
+     block is every other directive -- connect-src (fetch/XHR/WebSocket),
+     img-src, frame-src -- so even if a future bug reintroduces an
+     injection, exfiltration and outbound network egress from the WebView
+     are cut off. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #FFFFFF; overflow: hidden; }
   svg { width: 100vw; height: 100vh; display: block; touch-action: none; }
