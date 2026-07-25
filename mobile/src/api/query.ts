@@ -44,6 +44,13 @@ export interface StreamOptions {
  */
 export async function streamQuery(query: string, opts: StreamOptions = {}, h: StreamHandlers = {}) {
   const { topK = 10, rerankTopK = 5, pool = '', conversationId = '' } = opts
+
+  // Whether the initial streaming attempt got far enough that a failure
+  // from here on is a genuine backend error (bad response, quota, etc.)
+  // rather than "this RN runtime just doesn't support readable streams" —
+  // in the latter case we want to try the fallback path once, not report
+  // an error before even attempting it.
+  let reader: any
   try {
     const token = await getToken()
     const res = await fetch(`${API_BASE}/query/stream`, {
@@ -57,9 +64,22 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
         pool: pool || null, conversation_id: conversationId || null,
       }),
     })
-    const reader = (res as any).body?.getReader?.()
-    if (!reader) return await fallback(query, topK, rerankTopK, pool, conversationId, h)
+    reader = (res as any).body?.getReader?.()
+  } catch {
+    reader = undefined // network-level failure before we even got a response — fall back
+  }
 
+  if (!reader) {
+    // No readable stream support on this RN runtime (the common case) or the
+    // initial request itself failed outright — either way, try exactly once
+    // more via the plain /query endpoint. A failure here is real and must
+    // reach onError, not be silently retried again.
+    try { await fallback(query, topK, rerankTopK, pool, conversationId, h) }
+    catch (err: any) { h.onError?.(err) }
+    return
+  }
+
+  try {
     const decoder = new TextDecoder()
     let buffer = ''
     while (true) {
@@ -74,9 +94,12 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
         buffer = buffer.slice(m.index + m[0].length)
       }
     }
-  } catch (e: any) {
-    // Any streaming failure → reliable fallback path.
-    try { await fallback(query, topK, rerankTopK, pool, conversationId, h) } catch (err: any) { h.onError?.(err) }
+  } catch (err: any) {
+    // A stream that started but broke mid-flight (dropped connection, server
+    // error) — this is a real failure, not a "no stream support" case, so it
+    // must reach onError directly rather than silently retrying the query a
+    // second time (which could double-consume the daily AI-question quota).
+    h.onError?.(err)
   }
 }
 

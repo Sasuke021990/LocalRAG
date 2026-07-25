@@ -122,6 +122,11 @@ async def change_password(
     then sets the new one and bumps token_version — which invalidates every
     *other* existing session. The current client is re-issued a fresh
     session cookie carrying the new token_version, so it stays logged in.
+
+    Also returns the raw token as ``session_token`` for Bearer-token clients
+    (mobile) that can't read the cookie — without this, a mobile client's
+    stored token was invalidated by the token_version bump it just caused,
+    silently breaking every subsequent request until the user logged back in.
     """
     user = store.get_user_by_id(redis_client, user_id)
     if user is None:
@@ -132,8 +137,8 @@ async def change_password(
     store.set_password(redis_client, user_id, passwords.hash_password(body.new_password))
     store.bump_token_version(redis_client, user_id)
     new_version = user["token_version"] + 1
-    _set_session_cookie(response, user_id, new_version)
-    return {"status": "password_updated"}
+    token = _set_session_cookie(response, user_id, new_version)
+    return {"status": "password_updated", "session_token": token}
 
 
 @router.delete("/me")

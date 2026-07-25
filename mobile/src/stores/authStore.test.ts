@@ -5,6 +5,7 @@ jest.mock('../api/auth', () => ({
   signup: jest.fn(),
   getCurrentUser: jest.fn(),
   googleTokenExchange: jest.fn(),
+  deleteAccount: jest.fn(),
 }))
 jest.mock('../api/client', () => ({
   setToken: jest.fn(),
@@ -49,6 +50,23 @@ test('logout clears user + token', async () => {
   await useAuthStore.getState().logout()
   expect(useAuthStore.getState().user).toBeNull()
   expect(clearToken).toHaveBeenCalled()
+})
+
+test('deleteAccount calls the API with the password, then clears user + token', async () => {
+  useAuthStore.setState({ user: USER as any, checked: true })
+  ;(authApi.deleteAccount as jest.Mock).mockResolvedValue(undefined)
+  await useAuthStore.getState().deleteAccount('correct-password')
+  expect(authApi.deleteAccount).toHaveBeenCalledWith('correct-password')
+  expect(useAuthStore.getState().user).toBeNull()
+  expect(clearToken).toHaveBeenCalled()
+})
+
+test('deleteAccount propagates a failure (e.g. wrong password) without clearing the session', async () => {
+  useAuthStore.setState({ user: USER as any, checked: true })
+  ;(authApi.deleteAccount as jest.Mock).mockRejectedValue(new Error('Incorrect password'))
+  await expect(useAuthStore.getState().deleteAccount('wrong')).rejects.toThrow('Incorrect password')
+  expect(useAuthStore.getState().user).toEqual(USER)
+  expect(clearToken).not.toHaveBeenCalled()
 })
 
 test('hydrate with no token marks checked, no user', async () => {

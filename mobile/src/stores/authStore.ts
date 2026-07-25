@@ -13,6 +13,7 @@ interface AuthState {
   signup: (username: string, email: string, password: string) => Promise<void>
   loginWithGoogleCode: (code: string) => Promise<void>
   logout: () => Promise<void>
+  deleteAccount: (password: string) => Promise<void>
 }
 
 async function persist(user: User) {
@@ -64,6 +65,12 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
+    await clearToken()
+    set({ user: null })
+  },
+
+  deleteAccount: async (password) => {
+    await authApi.deleteAccount(password)
     await clearToken()
     set({ user: null })
   },

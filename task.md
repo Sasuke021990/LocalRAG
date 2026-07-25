@@ -21,18 +21,19 @@ Found during a full security review against a comprehensive checklist (auth, sec
 
 ---
 
-## Mobile launch-readiness audit (2026-07-25) — analysis only, nothing implemented
+## Mobile launch-readiness audit (2026-07-25) — Phase 1 (all P0s) fixed same day
 
-Full read-through of all 41 mobile source files (~3,400 lines) plus a systematic pass over every one of the 34 API call sites, cross-checked against the backend and web. Goal stated by the user: a bug-free, attractive, addictive, user-friendly mobile app. Verdict: feature coverage is genuinely good (~85% of web) and where error-handling is done well (Admin screen) it's excellent — but there's a **systemic weakness**: errors are silently swallowed across most of the app, which is directly why chat "felt broken." Not close to store-submittable yet; the gaps are well-defined and fixable.
+Full read-through of all 41 mobile source files (~3,400 lines) plus a systematic pass over every one of the 34 API call sites, cross-checked against the backend and web. Goal stated by the user: a bug-free, attractive, addictive, user-friendly mobile app. Original verdict: feature coverage is genuinely good (~85% of web) and where error-handling is done well (Admin screen) it's excellent — but there's a **systemic weakness**: errors are silently swallowed across most of the app, which is directly why chat "felt broken." All 6 P0 launch blockers below are now fixed — the app can build and submit, and the worst silent-failure paths are closed. P1/P2 below are still open.
 
-### 🔴 P0 — Launch blockers
+### 🔴 P0 — Launch blockers — **ALL 6 FIXED (2026-07-25, "Phase 1")**
 
-- [ ] **1. Chat errors render an empty bubble.** `chatStore.ts:145-148`'s `streamQuery` `onError` sets `streaming:false` but never records an error message; `ChatBubble.tsx:79` has nothing to show. Quota-exceeded, server-down, and timeout all render as an identical blank grey box. **This is the root cause of "chat not working properly."**
-- [ ] **2. Changing password silently kills the mobile session.** Backend's `change_password` bumps `token_version` and issues a new session via **cookie**; mobile authenticates with a **Bearer token** and never receives a replacement, so its stored token is instantly invalidated. `SettingsScreen.tsx:27` shows "Password updated ✓" and then every subsequent screen breaks until the user force-quits and logs back in.
-- [ ] **3. No global 401 handling.** `client.ts:28-34` throws on any non-OK response but nothing intercepts a 401 specifically — an expired/revoked session leaves the user stuck in a broken app with no auto-logout or re-login prompt anywhere.
-- [ ] **4. No account deletion on mobile.** Backend (`DELETE /auth/me`) and web both have it; `SettingsScreen.tsx` never calls it. **Automatic App Store rejection risk** (Apple 5.1.1(v) requires in-app account deletion for any app that allows signup).
-- [ ] **5. Google Sign-In is broken — decided: hide the button for v1.** Mobile sends `?redirect_uri=vaultly://…` (`LoginScreen.tsx:41`) but the backend's `google_login()` takes no such parameter and ignores it (`auth/routes.py:188`) — the browser lands on the *web* app and the user never returns to the native app. **Fix: remove/hide the "Continue with Google" button on mobile for v1** rather than fix the backend right now.
-- [ ] **6. No app icon, no splash image, no `assets/` directory, no `eas.json`.** `app.json` declares `splash`/`adaptiveIcon` but references zero actual image files, and no `assets/` directory exists at all in `mobile/`. **Cannot build or submit to either store in this state.**
+- [x] **1. Chat errors render an empty bubble — FIXED.** `ChatMsg` gained an `error?: string` field; `chatStore.ts`'s `onError` now sets it (backend's real message, or a generic fallback) instead of discarding it; `ChatBubble.tsx` renders a distinct rose error state instead of an empty bubble. Also fixed the underlying `query.ts` bug where a failure could get silently retried a second time (risked double-consuming the daily AI-question quota) before ever reaching `onError`. 3 new tests in `chatStore.test.ts`.
+- [x] **2. Password-change session break — FIXED.** Backend's `POST /auth/change-password` now returns the fresh `session_token` in the JSON body (previously cookie-only); `SettingsScreen.tsx` persists it via `setToken()` immediately after a successful change. 1 new backend test; live-verified end-to-end against a rebuilt Docker stack (old token confirmed dead, new token confirmed working).
+- [x] **3. No global 401 handling — FIXED.** `client.ts` gained a `setUnauthorizedHandler()` registration point (avoids a circular import with `authStore.ts`), wired up once in `App.tsx`: any 401 now force-logs-out, clears the React Query cache (closes a related "stale data visible after logout" gap), and shows a "Session expired" alert — but only when there was actually a session to lose, so a plain failed login attempt (also a 401) doesn't trigger a spurious alert. 2 new tests in `client.test.ts`.
+- [x] **4. No account deletion on mobile — FIXED.** New `authApi.deleteAccount()` + `authStore.deleteAccount()`, and a "Danger zone" card in `SettingsScreen.tsx` (password re-confirmation + a destructive `Alert.alert` gate before the irreversible call). 2 new tests; live-verified end-to-end (wrong password → 400, correct password → 200 + old token immediately dead). *Noted in passing: web also has no UI for this — backend-only since the L4 security fix — out of scope for this mobile-focused pass.*
+- [x] **5. Google Sign-In — hidden for v1, as decided.** Removed the button, handler, and now-unused imports from `LoginScreen.tsx`. The deep-link exchange plumbing (`authStore.loginWithGoogleCode`, `api/auth.ts::googleTokenExchange`) is left in place, unused, for whenever the backend gets fixed to support it properly.
+- [x] **6. App icon / splash / assets / eas.json — FIXED.** Generated real on-brand assets (`mobile/assets/icon.png`, `adaptive-icon.png`, `splash.png`) matching the exact indigo→pink gradient + vault/padlock glyph already used in the app's own `Wordmark.tsx` — not generic placeholders. Wired into `app.json` (`icon`, `splash.image`, `android.adaptiveIcon.foregroundImage` + a proper solid `backgroundColor` for contrast, plus `ios.buildNumber`/`android.versionCode`). New `eas.json` with standard development/preview/production build profiles. Also fixed an unrelated-but-real `expo-doctor` finding along the way: `react-native-reanimated`'s missing `react-native-worklets` peer dependency (could crash a real, non-Expo-Go build) — installed. `expo-doctor`: **18/18 checks passing** (was 17/18 before the peer-dep fix).
+- [x] **Verification across all 6**: mobile Jest suite 21/21 passing, `tsc --noEmit` clean, full `expo export` bundle succeeds, `expo-doctor` 18/18. Backend suite 461/461 passing. **Not yet re-tested on a physical device** — all verified via typecheck/tests/bundle/live-curl against the rebuilt backend, not an actual Expo Go session. Do a real device pass before calling Phase 1 fully done.
 
 ### 🟠 P1 — Broken or misleading
 
@@ -89,13 +90,11 @@ Traced all 34 call sites across `stores/`, `screens/`, and `components/` for try
 - [ ] **Camera-capture upload (§1i)** needs `expo-camera` or `expo-image-picker` — neither is installed.
 - [ ] **Store submission** additionally needs: privacy-policy/terms links somewhere in the app, iOS permission usage strings (camera, photo library once the above land), and real `ios.buildNumber`/`android.versionCode` values in `app.json`.
 
-### Recommended order (not started — awaiting go-ahead)
+### Recommended order
 
-1. **Phase 1 — stop the bleeding (P0 items 1-6):** chat error surfacing → global 401 handling → fix or work around the password-change session break → add account deletion → hide the Google button (decided) → add app icon/splash/`assets/`/`eas.json`.
-2. **Phase 2 — trust (P1 items 7-15):** logout hits the backend → fix `res.ok` handling → pull-to-refresh everywhere → auto-refresh after upload → error boundary → offline handling.
-3. **Phase 3 — delight (P2 items 16-23):** animations → dark mode → haptics → chat message actions → bigger touch targets → quota visibility → accessibility labels.
-
-Phase 1 alone should convert "feels broken" into "feels solid" — items 1 and 3 in particular explain most of the confusion hit during this session's live testing.
+1. ✅ **Phase 1 — stop the bleeding (P0 items 1-6) — DONE 2026-07-25.** Chat error surfacing → global 401 handling → password-change session break → account deletion → hide the Google button → app icon/splash/`assets/`/`eas.json`. See the P0 section above for what actually landed for each.
+2. **Phase 2 — trust (P1 items 7-15) — not started.** Logout hits the backend → fix `res.ok` handling → pull-to-refresh everywhere → auto-refresh after upload → error boundary → offline handling.
+3. **Phase 3 — delight (P2 items 16-23) — not started.** Animations → dark mode → haptics → chat message actions → bigger touch targets → quota visibility → accessibility labels.
 
 ---
 
