@@ -387,7 +387,7 @@ class DocumentIngestionPipeline:
             _cb(progress_callback, 50, f"Split into {len(chunks)} chunks ✓")
 
             # 3. Embed
-            embeddings = self._generate_embeddings(chunks)
+            embeddings = self._generate_embeddings(chunks, progress_callback)
             _cb(progress_callback, 70, "Embeddings generated ✓")
 
             # 4a. Store in Redis
@@ -663,10 +663,30 @@ class DocumentIngestionPipeline:
     # Embeddings
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _generate_embeddings(self, chunks: list) -> list:
+    def _generate_embeddings(
+        self, chunks: list, progress_callback: Optional[Callable[[int, str], None]] = None,
+    ) -> list:
+        """
+        Embed all chunks, reporting granular progress between 50% and 70% of
+        the overall pipeline. Encoding happens in batches of a few hundred
+        chunks per ``encode`` call (each internally mini-batched by
+        sentence-transformers) so a large document — thousands of chunks —
+        updates the progress entry every few seconds instead of sitting
+        silently at 50% for minutes. Those periodic writes also refresh the
+        progress key's TTL, so a long embed can't expire it mid-task.
+        """
         if not chunks:
             return []
-        return [e.tolist() for e in self.model.encode(chunks)]
+        BATCH = 256
+        out: list = []
+        for start in range(0, len(chunks), BATCH):
+            batch = chunks[start:start + BATCH]
+            out.extend(e.tolist() for e in self.model.encode(batch))
+            done = min(start + BATCH, len(chunks))
+            if len(chunks) > BATCH:
+                pct = 50 + int(20 * done / len(chunks))
+                _cb(progress_callback, pct, f"Embedding chunks {done}/{len(chunks)}…")
+        return out
 
 
 # ─── Module-level helper ──────────────────────────────────────────────────────

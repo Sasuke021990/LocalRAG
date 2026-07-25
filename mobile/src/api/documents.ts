@@ -130,29 +130,40 @@ const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/
  * api/query.ts (task.md P1 #8).
  */
 export async function watchUploadProgress(taskId: string, h: UploadProgressHandlers) {
+  // The server always ends the stream with a terminal event (complete /
+  // error) — but a network blip or proxy timeout can still cut the
+  // connection mid-watch. A long ingestion (big file, CPU embedding) is
+  // exactly when that's most likely, so reconnect and resume rather than
+  // letting the progress bar silently vanish while the server works on.
+  const MAX_CONNECTS = 10
   try {
     const token = await getToken()
-    const res = await expoFetch(`${API_BASE}/progress/${encodeURIComponent(taskId)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-    const reader = (res as any).body?.getReader?.()
-    if (!reader) {
-      h.onDone?.({ progress: 100, message: 'Done — ready to search', status: 'complete' })
-      return
-    }
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let m
-      while ((m = FRAME_SEP.exec(buffer)) !== null) {
-        const stop = dispatchProgress(buffer.slice(0, m.index), h)
-        buffer = buffer.slice(m.index + m[0].length)
-        if (stop) return
+    for (let attempt = 0; attempt < MAX_CONNECTS; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500))
+      const res = await expoFetch(`${API_BASE}/progress/${encodeURIComponent(taskId)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      const reader = (res as any).body?.getReader?.()
+      if (!reader) {
+        h.onDone?.({ progress: 100, message: 'Done — ready to search', status: 'complete' })
+        return
       }
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let m
+        while ((m = FRAME_SEP.exec(buffer)) !== null) {
+          const stop = dispatchProgress(buffer.slice(0, m.index), h)
+          buffer = buffer.slice(m.index + m[0].length)
+          if (stop) return // terminal event handled — the only normal exit
+        }
+      }
+      // Stream ended without a terminal event — reconnect and keep watching.
     }
+    h.onError?.(new Error('Lost the processing-progress stream.'))
   } catch (e: any) {
     h.onError?.(e)
   }

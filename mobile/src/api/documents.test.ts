@@ -60,11 +60,15 @@ function frames(...chunks: string[]) {
   }
 }
 
+const COMPLETE_FRAME = 'event: complete\ndata: {"progress":100,"message":"Done","status":"complete"}\n\n'
+
 beforeEach(() => {
   jest.clearAllMocks()
   ;(global as any).XMLHttpRequest = FakeXhr
-  // Default: progress stream immediately ends with no frames.
-  mockExpoFetch.mockResolvedValue({ ok: true, body: { getReader: () => frames() } })
+  // Default: progress stream immediately delivers a terminal complete event.
+  // (A stream that ends *without* one now triggers reconnection — covered by
+  // its own test below.)
+  mockExpoFetch.mockResolvedValue({ ok: true, body: { getReader: () => frames(COMPLETE_FRAME) } })
 })
 
 test('reports byte-transfer progress during the upload phase', async () => {
@@ -88,6 +92,7 @@ test('server-side processing progress occupies the second half of the bar', asyn
       getReader: () => frames(
         'event: progress\ndata: {"progress":0,"message":"Chunking","status":"processing"}\n\n',
         'event: progress\ndata: {"progress":100,"message":"Embedding","status":"processing"}\n\n',
+        COMPLETE_FRAME,
       ),
     },
   })
@@ -110,6 +115,7 @@ test('the bar never moves backwards across the two phases', async () => {
       getReader: () => frames(
         'event: progress\ndata: {"progress":10,"message":"Chunking","status":"processing"}\n\n',
         'event: progress\ndata: {"progress":80,"message":"Embedding","status":"processing"}\n\n',
+        COMPLETE_FRAME,
       ),
     },
   })
@@ -151,6 +157,24 @@ test('a real stream delivers processing frames instead of a fake instant complet
   expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ message: 'Embedding' }))
   expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }))
 })
+
+test('reconnects when the stream drops without a terminal event', async () => {
+  // First connection dies mid-processing (no terminal frame); the second
+  // delivers completion. Before the reconnect logic, the first silent drop
+  // ended the watch — the progress bar vanished while the server worked on.
+  mockExpoFetch
+    .mockResolvedValueOnce({
+      ok: true,
+      body: { getReader: () => frames('event: progress\ndata: {"progress":30,"message":"Embedding","status":"processing"}\n\n') },
+    })
+    .mockResolvedValueOnce({ ok: true, body: { getReader: () => frames(COMPLETE_FRAME) } })
+  const onDone = jest.fn()
+  const onError = jest.fn()
+  await watchUploadProgress('t1', { onDone, onError })
+  expect(mockExpoFetch).toHaveBeenCalledTimes(2)
+  expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }))
+  expect(onError).not.toHaveBeenCalled()
+}, 10000)
 
 test('a non-2xx upload rejects with the backend detail message', async () => {
   const promise = uploadWithProgress({ uri: 'file:///a.pdf', name: 'a.pdf' }, '', {})

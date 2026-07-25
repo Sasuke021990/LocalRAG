@@ -870,13 +870,32 @@ async def stream_progress(task_id: str, user_id: str = Depends(require_current_u
     """
     async def _generator():
         last = None
-        # ~2 minutes at the polling interval below — generous for even a slow
-        # image-OCR + embed pass; the client can just retry if it's cut short.
-        for _ in range(300):
+        seen = False
+        misses = 0
+        # ~15 minutes at the polling interval below. This used to be ~2
+        # minutes, and a large document's embed pass (CPU, thousands of
+        # chunks) routinely outlived it — the stream then just *ended* with
+        # no terminal event, so the client's progress bar silently vanished
+        # while the server was still working. The ingestion pipeline now
+        # also refreshes the progress entry every embedding batch, so a
+        # legitimately-running task never looks abandoned here.
+        for _ in range(2250):
             entry = upload_progress.get_progress(auth_redis_client, task_id)
             if entry is None:
+                misses += 1
+                # Never-seen: give the background task a moment to write its
+                # first entry. Seen-then-vanished: the entry's TTL expired or
+                # was cleared — either way, end with a terminal event rather
+                # than leaving the client to infer meaning from silence.
+                if (seen and misses >= 5) or (not seen and misses >= 50):
+                    yield {"event": "error", "data": json.dumps(
+                        {"detail": "Progress unavailable — the document may still be processing; check your documents shortly."}
+                    )}
+                    return
                 await asyncio.sleep(0.4)
                 continue
+            misses = 0
+            seen = True
             if entry.get("user_id") != user_id:
                 # Don't leak another user's task existence/progress.
                 yield {"event": "error", "data": json.dumps({"detail": "Task not found"})}
@@ -891,6 +910,10 @@ async def stream_progress(task_id: str, user_id: str = Depends(require_current_u
                 if terminal:
                     return
             await asyncio.sleep(0.4)
+        # Window exhausted with the task still running — terminal event, not silence.
+        yield {"event": "error", "data": json.dumps(
+            {"detail": "Still processing — this is taking longer than expected. The document will appear once it's done."}
+        )}
 
     return EventSourceResponse(_generator())
 
