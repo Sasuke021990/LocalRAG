@@ -1,4 +1,5 @@
-import { request, jsonBody, getToken, API_BASE } from './client'
+import { fetch as expoFetch } from 'expo/fetch'
+import { request, jsonBody, getToken, API_BASE, notifyUnauthorized, type ApiError } from './client'
 
 export interface Pool { name: string; document_count: number }
 export interface Doc {
@@ -57,14 +58,52 @@ export interface UploadStartResult {
   message: string
 }
 
-export async function uploadDocument(file: PickedFile, pool = '', chunkSize = 512, chunkOverlap = 50) {
+/**
+ * POST the file to /upload, reporting byte-transfer progress as a 0..1
+ * fraction via ``onTransfer``.
+ *
+ * Uses XMLHttpRequest rather than fetch because only XHR exposes
+ * ``upload.onprogress`` — with fetch, an 11 MB file produced a multi-second
+ * dead stretch where the UI showed nothing at all and looked hung. Handles
+ * 401 through ``notifyUnauthorized`` so bypassing ``request`` doesn't also
+ * bypass the app-wide auto-logout.
+ */
+export async function uploadDocument(
+  file: PickedFile, pool = '', chunkSize = 512, chunkOverlap = 50,
+  onTransfer?: (fraction: number) => void,
+) {
+  const token = await getToken()
   const form = new FormData()
   // React Native FormData file shape.
   form.append('file', { uri: file.uri, name: file.name, type: file.mimeType || 'application/octet-stream' } as any)
   form.append('pool', pool)
   form.append('chunk_size', String(chunkSize))
   form.append('chunk_overlap', String(chunkOverlap))
-  return request<UploadStartResult>('/upload', { method: 'POST', body: form })
+
+  return new Promise<UploadStartResult>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_BASE}/upload`)
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onTransfer?.(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      let body: any
+      try { body = JSON.parse(xhr.responseText) } catch { body = null }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as UploadStartResult)
+        return
+      }
+      if (xhr.status === 401) notifyUnauthorized()
+      const err: ApiError = new Error(body?.detail || body?.message || `HTTP ${xhr.status}`)
+      err.status = xhr.status
+      reject(err)
+    }
+    xhr.onerror = () => reject(new Error('Upload failed — check your connection and try again.'))
+    xhr.ontimeout = () => reject(new Error('Upload timed out. Please try again.'))
+    xhr.send(form)
+  })
 }
 
 export interface UploadProgressEvent { progress: number; message: string; status: 'processing' | 'complete' | 'failed' }
@@ -80,13 +119,20 @@ const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/
 
 /**
  * Subscribes to GET /progress/{task_id}, an SSE stream (no plain-JSON polling
- * endpoint exists server-side). Mirrors the fetch+ReadableStream approach used
- * by streamQuery in api/query.ts, since RN has no native EventSource.
+ * endpoint exists server-side). Mirrors the approach used by streamQuery in
+ * api/query.ts, since RN has no native EventSource.
+ *
+ * Uses `expo/fetch`, NOT React Native's global fetch: RN's fetch never
+ * exposes a readable `body.getReader()`, so this used to fall straight into
+ * the no-reader branch below and report an instant fake "complete" — the
+ * progress bar never moved during processing, which is exactly what made a
+ * large upload look hung. Same root cause as the chat-streaming fix in
+ * api/query.ts (task.md P1 #8).
  */
 export async function watchUploadProgress(taskId: string, h: UploadProgressHandlers) {
   try {
     const token = await getToken()
-    const res = await fetch(`${API_BASE}/progress/${encodeURIComponent(taskId)}`, {
+    const res = await expoFetch(`${API_BASE}/progress/${encodeURIComponent(taskId)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
     const reader = (res as any).body?.getReader?.()
@@ -128,14 +174,32 @@ function dispatchProgress(frame: string, h: UploadProgressHandlers): boolean {
   return false
 }
 
+// An upload has two phases the user shouldn't have to think about: sending
+// the bytes, then the server ingesting them. Each is mapped onto half of one
+// bar so it only ever moves forwards -- reporting both as 0..100 made the bar
+// visibly jump backwards to 0 when the second phase started.
+const TRANSFER_SHARE = 0.5
+
 export async function uploadWithProgress(
   file: PickedFile, pool: string, handlers: UploadProgressHandlers, chunkSize = 512, chunkOverlap = 50,
 ) {
-  const res = await uploadDocument(file, pool, chunkSize, chunkOverlap)
+  const res = await uploadDocument(file, pool, chunkSize, chunkOverlap, (fraction) => {
+    handlers.onProgress?.({
+      progress: Math.round(fraction * 100 * TRANSFER_SHARE),
+      message: fraction >= 1 ? 'Uploaded — starting processing…' : 'Uploading…',
+      status: 'processing',
+    })
+  })
   if (!res.task_id) {
     handlers.onDone?.({ progress: 100, message: 'Done — ready to search', status: 'complete' })
     return res
   }
-  await watchUploadProgress(res.task_id, handlers)
+  await watchUploadProgress(res.task_id, {
+    ...handlers,
+    onProgress: (p) => handlers.onProgress?.({
+      ...p,
+      progress: Math.round(100 * TRANSFER_SHARE + p.progress * (1 - TRANSFER_SHARE)),
+    }),
+  })
   return res
 }

@@ -31,6 +31,16 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn
 }
 
+/**
+ * Fire the registered 401 handler from a call site that doesn't go through
+ * ``request`` — currently the XHR-based upload, which needs raw
+ * ``upload.onprogress`` events that fetch can't provide. Without this, an
+ * expired session during an upload would skip the global auto-logout.
+ */
+export function notifyUnauthorized(): void {
+  onUnauthorized?.()
+}
+
 /** Fetch wrapper: attaches the bearer token, parses JSON errors like the web client. */
 export async function request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   const token = await getToken()

@@ -67,13 +67,23 @@ export default function KnowledgeScreen() {
     setProgressPct(0)
     setProgressMessage('Uploading…')
     try {
+      let streamError = ''
       await uploadWithProgress({ uri: f.uri, name: f.name, mimeType: f.mimeType }, uploadPool, {
         onProgress: (p) => { setProgressPct(p.progress); setProgressMessage(p.message) },
         onDone: (p) => { setProgressPct(p.progress); setProgressMessage(p.message) },
-        onError: () => {},
+        // The file itself uploaded fine if we got this far — only the
+        // progress stream broke. Surface it instead of freezing the bar
+        // mid-way with no explanation (task.md's silent-failure audit).
+        onError: (e) => { streamError = e?.message || 'Lost track of processing progress.' },
       })
       setUploadPool('')
       refresh()
+      if (streamError) {
+        Alert.alert(
+          'Upload sent, but progress was lost',
+          `${streamError}\n\nThe document is likely still processing — pull to refresh in a moment.`,
+        )
+      }
     } catch (e: any) {
       Alert.alert('Upload failed', e.message || 'Please try again.')
     } finally {
