@@ -28,5 +28,20 @@ export const googleTokenExchange = (code: string) =>
 export const requestPasswordReset = (email: string) =>
   request('/auth/password-reset/request', jsonBody('POST', { email }))
 
+// Returns a fresh session_token: this request itself invalidates the
+// client's current token (the backend bumps token_version), so the caller
+// must persist the returned one immediately or every subsequent request
+// will 401.
 export const changePassword = (currentPassword: string, newPassword: string) =>
-  request('/auth/change-password', jsonBody('POST', { current_password: currentPassword, new_password: newPassword }))
+  request<{ status: string; session_token: string }>(
+    '/auth/change-password', jsonBody('POST', { current_password: currentPassword, new_password: newPassword }),
+  )
+
+// Permanently deletes the signed-in user's account and everything they own
+// (documents, pools, conversations, tokens, webhooks) -- cannot be undone.
+// `password` re-confirms identity even though the session is already
+// authenticated; blank is only valid for a Google-only account (no
+// password set), which isn't reachable on mobile today since Google
+// Sign-In is hidden here (see LoginScreen.tsx).
+export const deleteAccount = (password: string) =>
+  request('/auth/me', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) })

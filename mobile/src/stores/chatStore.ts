@@ -12,6 +12,11 @@ export interface ChatMsg {
   // The pool this turn was scoped to when sent — used only for the
   // "Searching/Analysing …" status text before any passages stream back.
   queryPool?: string
+  // Set when the request itself failed (network down, quota exceeded,
+  // server error) — distinct from `refused`, which is a normal grounded
+  // "nothing relevant found" answer. Rendered as an explicit error state
+  // instead of an empty bubble.
+  error?: string
 }
 
 // Fixed retrieval depth (matches web): fetch 40 candidates, rerank, keep the
@@ -142,8 +147,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({ loading: false })
         get().loadConversations()
       },
-      onError: () => {
-        patch({ streaming: false })
+      onError: (e) => {
+        // Surface the real failure instead of leaving an empty bubble — the
+        // backend's detail message (quota exceeded, server error, etc.) is
+        // already user-readable (see backend's _internal_error/rate-limit
+        // messages); a raw network failure falls back to a generic message.
+        patch({ streaming: false, error: e?.message || 'Something went wrong. Please try again.' })
         set({ loading: false })
       },
     })

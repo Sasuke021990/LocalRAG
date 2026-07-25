@@ -134,6 +134,23 @@ class TestChangePassword:
         assert auth_client.post("/auth/login", json={"email": "cp@example.com", "password": "brandnewpass2"}).status_code == 200
         assert auth_client.post("/auth/login", json={"email": "cp@example.com", "password": "originalpass1"}).status_code == 401
 
+    def test_change_password_returns_a_usable_session_token(self, auth_client):
+        # Bearer-token clients (mobile) can't read the re-issued cookie -- the
+        # response body must carry a fresh, working token, since this same
+        # request just invalidated whatever token the client had stored via
+        # the token_version bump.
+        auth_client.post("/auth/signup", json={"email": "cp3@example.com", "password": "originalpass1"})
+        resp = auth_client.post(
+            "/auth/change-password",
+            json={"current_password": "originalpass1", "new_password": "brandnewpass2"},
+        )
+        new_token = resp.json()["session_token"]
+        assert new_token
+        auth_client.cookies.clear()
+        me = auth_client.get("/auth/me", headers={"Authorization": f"Bearer {new_token}"})
+        assert me.status_code == 200
+        assert me.json()["email"] == "cp3@example.com"
+
     def test_change_password_wrong_current_400(self, auth_client):
         auth_client.post("/auth/signup", json={"email": "cp2@example.com", "password": "originalpass1"})
         resp = auth_client.post(

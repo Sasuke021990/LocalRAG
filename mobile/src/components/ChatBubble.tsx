@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native'
 import Markdown from 'react-native-markdown-display'
-import { Sparkles, SearchX, ChevronDown, FileText, FolderOpen } from 'lucide-react-native'
+import { Sparkles, SearchX, TriangleAlert, ChevronDown, FileText, FolderOpen } from 'lucide-react-native'
 import Badge from './ui/Badge'
 import { colors, fonts, radius } from '../theme/tokens'
 import type { Source } from '../api/query'
@@ -14,6 +14,10 @@ export interface ChatMsg {
   refused?: boolean
   streaming?: boolean
   queryPool?: string
+  // Set when the request itself failed — distinct from `refused` (a normal
+  // grounded "nothing relevant found" answer). Rendered as an explicit
+  // error state instead of an empty bubble.
+  error?: string
 }
 
 export default function ChatBubble({ msg }: { msg: ChatMsg }) {
@@ -32,7 +36,7 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
 
   // Transient status shown before the first answer token arrives.
   const statusText = (() => {
-    if (!msg.streaming || msg.answer || msg.refused) return ''
+    if (!msg.streaming || msg.answer || msg.refused || msg.error) return ''
     const scope = msg.queryPool ? `the "${msg.queryPool}" pool` : 'your documents'
     return msg.sources.length ? `Analysing ${scope}…` : `Searching ${scope}…`
   })()
@@ -46,8 +50,10 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
 
       {/* Answer */}
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <View style={[styles.avatar, { backgroundColor: msg.refused ? colors.amberSoft : colors.pinkSoft }]}>
-          {msg.refused ? <SearchX color={colors.amber} size={16} /> : <Sparkles color={colors.pink} size={16} />}
+        <View style={[styles.avatar, { backgroundColor: msg.error ? colors.roseSoft : msg.refused ? colors.amberSoft : colors.pinkSoft }]}>
+          {msg.error
+            ? <TriangleAlert color={colors.rose} size={16} />
+            : msg.refused ? <SearchX color={colors.amber} size={16} /> : <Sparkles color={colors.pink} size={16} />}
         </View>
         <View style={{ flex: 1 }}>
           {msg.reasoning ? (
@@ -60,7 +66,7 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
           ) : null}
 
           {/* Which knowledge pool(s) this answer is grounded in */}
-          {!msg.refused && sourcePools.length > 0 ? (
+          {!msg.refused && !msg.error && sourcePools.length > 0 ? (
             <View style={styles.poolRow}>
               {sourcePools.map((p) => (
                 <Badge key={p} label={p} color="indigo" icon={<FolderOpen color={colors.indigo} size={11} />} />
@@ -68,8 +74,14 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
             </View>
           ) : null}
 
-          <View style={[styles.answerBubble, msg.refused && { backgroundColor: colors.amberSoft, borderColor: colors.amber }]}>
-            {statusText ? (
+          <View style={[
+            styles.answerBubble,
+            msg.refused && { backgroundColor: colors.amberSoft, borderColor: colors.amber },
+            msg.error ? { backgroundColor: colors.roseSoft, borderColor: colors.rose } : null,
+          ]}>
+            {msg.error ? (
+              <Text style={styles.errorText}>{msg.error}</Text>
+            ) : statusText ? (
               <View style={styles.statusRow}>
                 <ActivityIndicator size="small" color={colors.inkSoft} />
                 <Text style={styles.statusText}>{statusText}</Text>
@@ -81,7 +93,7 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
               </>
             )}
 
-            {!msg.refused && sourceDocs.length > 0 ? (
+            {!msg.refused && !msg.error && sourceDocs.length > 0 ? (
               <View style={styles.sourcesRow}>
                 <FileText color={colors.inkMuted} size={13} />
                 {sourceDocs.map((doc) => (
@@ -141,6 +153,7 @@ const styles = StyleSheet.create({
   poolRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   statusText: { fontFamily: fonts.body, fontSize: 13, fontStyle: 'italic', color: colors.inkSoft },
+  errorText: { fontFamily: fonts.body, fontSize: 14, color: colors.rose, lineHeight: 20 },
   cursor: { color: colors.pink, fontSize: 16 },
   sourcesRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border },
 })

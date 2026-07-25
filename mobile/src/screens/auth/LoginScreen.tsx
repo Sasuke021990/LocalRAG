@@ -1,9 +1,6 @@
 import React, { useState } from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
-import * as WebBrowser from 'expo-web-browser'
-import * as Linking from 'expo-linking'
-import Constants from 'expo-constants'
 import { useAuthStore } from '../../stores/authStore'
 import Screen from '../../components/Screen'
 import Wordmark from '../../components/Wordmark'
@@ -17,7 +14,6 @@ type Props = NativeStackScreenProps<AuthStackParams, 'Login'>
 
 export default function LoginScreen({ navigation }: Props) {
   const login = useAuthStore((s) => s.login)
-  const loginWithGoogleCode = useAuthStore((s) => s.loginWithGoogleCode)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -30,24 +26,14 @@ export default function LoginScreen({ navigation }: Props) {
     finally { setLoading(false) }
   }
 
-  // Opens Google consent in the system browser and returns the auth `code`
-  // via the vaultly:// deep link, which the backend exchanges for a token.
-  // Requires the Google OAuth app + backend redirect to include the native URI.
-  async function google() {
-    setError('')
-    try {
-      const apiBase = (Constants.expoConfig?.extra as any)?.apiBaseUrl
-      const redirect = Linking.createURL('auth/callback') // vaultly://auth/callback
-      const authUrl = `${apiBase}/auth/google/login?redirect_uri=${encodeURIComponent(redirect)}`
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirect)
-      if (result.type === 'success' && result.url) {
-        const code = Linking.parse(result.url).queryParams?.code as string | undefined
-        if (code) { await loginWithGoogleCode(code); return }
-      }
-    } catch (e: any) {
-      setError('Google sign-in is not available yet — use email and password.')
-    }
-  }
+  // Google Sign-In is intentionally not offered on mobile for v1: the
+  // backend's google_login() ignores the redirect_uri a native app must
+  // supply to get the auth code back via deep link, so the flow strands the
+  // user in the system browser on the web app instead of returning to the
+  // app (task.md's mobile launch-readiness audit, P0 #5). Email/password
+  // and the deep-link exchange plumbing (authStore.loginWithGoogleCode,
+  // api/auth.ts::googleTokenExchange) are left in place, unused, for when
+  // the backend is fixed to support this properly.
 
   return (
     <Screen contentStyle={{ paddingTop: 48 }}>
@@ -60,7 +46,6 @@ export default function LoginScreen({ navigation }: Props) {
         <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <Button title="Sign in" onPress={submit} loading={loading} />
-        <Button title="Continue with Google" variant="secondary" onPress={google} />
       </Card>
 
       <View style={styles.footer}>
