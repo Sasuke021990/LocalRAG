@@ -4,7 +4,8 @@ import { useNavigation } from '@react-navigation/native'
 import { Plus, Pencil, Trash2, Check, X, MessageSquare } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import { useChatStore } from '../stores/chatStore'
-import { colors, fonts, radius } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts, radius } from '../theme/tokens'
 import { timeAgo } from '../utils/format'
 import type { ConversationSummary } from '../api/chat'
 
@@ -17,6 +18,7 @@ export default function ConversationsScreen() {
   const renameConversation = useChatStore((s) => s.renameConversation)
   const deleteConversation = useChatStore((s) => s.deleteConversation)
   const newChat = useChatStore((s) => s.newChat)
+  const { colors } = useAppTheme()
 
   const [editingId, setEditingId] = useState('')
   const [draft, setDraft] = useState('')
@@ -73,17 +75,17 @@ export default function ConversationsScreen() {
 
   return (
     <Screen scroll={false}>
-      <Pressable style={styles.newChat} onPress={startNewChat}>
+      <Pressable style={[styles.newChat, { backgroundColor: colors.indigo }]} onPress={startNewChat}>
         <Plus color="#fff" size={18} />
         <Text style={styles.newChatText}>New chat</Text>
       </Pressable>
 
       {conversationsLoading ? (
-        <Text style={styles.hint}>Loading…</Text>
+        <Text style={[styles.hint, { color: colors.inkMuted }]}>Loading…</Text>
       ) : conversations.length === 0 ? (
         <View style={styles.emptyWrap}>
           <MessageSquare color={colors.inkMuted} size={22} />
-          <Text style={styles.hint}>No conversations yet — send a message to start one.</Text>
+          <Text style={[styles.hint, { color: colors.inkMuted }]}>No conversations yet — send a message to start one.</Text>
         </View>
       ) : (
         <FlatList
@@ -93,14 +95,14 @@ export default function ConversationsScreen() {
           refreshing={refreshing}
           onRefresh={onRefresh}
           renderItem={({ item }) => (
-            <View style={styles.row}>
+            <View style={[styles.row, { borderColor: colors.border, backgroundColor: colors.surface }]}>
               {editingId === item.id ? (
                 <View style={styles.editRow}>
                   <TextInput
                     value={draft}
                     onChangeText={setDraft}
                     autoFocus
-                    style={styles.editInput}
+                    style={[styles.editInput, { color: colors.ink, borderColor: colors.indigo }]}
                     onSubmitEditing={() => commitEdit(item)}
                   />
                   <Pressable onPress={() => commitEdit(item)} hitSlop={8}><Check color={colors.emerald} size={18} /></Pressable>
@@ -109,9 +111,9 @@ export default function ConversationsScreen() {
               ) : (
                 <>
                   <Pressable style={styles.rowMain} onPress={() => open(item)}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
-                    <Text style={styles.rowPreview} numberOfLines={1}>{item.preview || 'No messages yet'}</Text>
-                    <Text style={styles.rowMeta}>{timeAgo(item.updated_at)}{item.pool ? ` · ${item.pool}` : ''}</Text>
+                    <Text style={[styles.rowTitle, { color: colors.ink }]} numberOfLines={1}>{item.title}</Text>
+                    <Text style={[styles.rowPreview, { color: colors.inkMuted }]} numberOfLines={1}>{item.preview || 'No messages yet'}</Text>
+                    <Text style={[styles.rowMeta, { color: colors.inkMuted }]}>{timeAgo(item.updated_at)}{item.pool ? ` · ${item.pool}` : ''}</Text>
                   </Pressable>
                   <View style={styles.actions}>
                     <Pressable onPress={() => startEdit(item)} hitSlop={8}><Pencil color={colors.inkMuted} size={16} /></Pressable>
@@ -130,24 +132,24 @@ export default function ConversationsScreen() {
 const styles = StyleSheet.create({
   newChat: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: colors.indigo, borderRadius: radius.md, paddingVertical: 13, marginBottom: 16,
+    borderRadius: radius.md, paddingVertical: 13, marginBottom: 16,
   },
   newChatText: { fontFamily: fonts.bodySemi, fontSize: 14, color: '#fff' },
-  hint: { fontFamily: fonts.body, fontSize: 13, color: colors.inkMuted, textAlign: 'center', marginTop: 12 },
+  hint: { fontFamily: fonts.body, fontSize: 13, textAlign: 'center', marginTop: 12 },
   emptyWrap: { alignItems: 'center', gap: 8, marginTop: 40 },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
-    paddingHorizontal: 14, paddingVertical: 12, backgroundColor: colors.surface,
+    borderWidth: 1, borderRadius: radius.md,
+    paddingHorizontal: 14, paddingVertical: 12,
   },
   rowMain: { flex: 1, gap: 2 },
-  rowTitle: { fontFamily: fonts.bodySemi, fontSize: 14, color: colors.ink },
-  rowPreview: { fontFamily: fonts.body, fontSize: 12, color: colors.inkMuted },
-  rowMeta: { fontFamily: fonts.body, fontSize: 11, color: colors.inkMuted },
+  rowTitle: { fontFamily: fonts.bodySemi, fontSize: 14 },
+  rowPreview: { fontFamily: fonts.body, fontSize: 12 },
+  rowMeta: { fontFamily: fonts.body, fontSize: 11 },
   actions: { flexDirection: 'row', gap: 12, paddingLeft: 8 },
   editRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   editInput: {
-    flex: 1, fontFamily: fonts.body, fontSize: 14, color: colors.ink,
-    borderWidth: 1, borderColor: colors.indigo, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 6,
+    flex: 1, fontFamily: fonts.body, fontSize: 14,
+    borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 6,
   },
 })

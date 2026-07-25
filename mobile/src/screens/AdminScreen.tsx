@@ -9,10 +9,12 @@ import Input from '../components/ui/Input'
 import { useAuthStore } from '../stores/authStore'
 import * as admin from '../api/admin'
 import { formatBytes, bytesToGb, gbToBytes } from '../utils/format'
-import { colors, fonts, radius } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts, radius } from '../theme/tokens'
 
 export default function AdminScreen() {
   const currentUser = useAuthStore((s) => s.user)
+  const { colors } = useAppTheme()
   const [stats, setStats] = useState<admin.AdminStats | null>(null)
   const [settings, setSettings] = useState<admin.AdminSettings>({ signups_enabled: true, default_storage_quota_bytes: 0 })
   const [users, setUsers] = useState<admin.AdminUser[]>([])
@@ -110,10 +112,10 @@ export default function AdminScreen() {
   }
 
   const statCards = stats ? [
-    { label: 'Users', value: String(stats.total_users), sub: `${stats.active_users} active`, Icon: Users, color: 'indigo' as const },
-    { label: 'Admins', value: String(stats.admin_users), Icon: ShieldCheck, color: 'pink' as const },
-    { label: 'Storage used', value: formatBytes(stats.total_storage_used_bytes), Icon: HardDrive, color: 'emerald' as const },
-    { label: 'Documents', value: String(stats.total_documents), sub: `${stats.total_tokens} tokens · ${stats.total_webhooks} webhooks`, Icon: FileText, color: 'amber' as const },
+    { label: 'Users', value: String(stats.total_users), sub: `${stats.active_users} active`, Icon: Users, tint: colors.indigo },
+    { label: 'Admins', value: String(stats.admin_users), Icon: ShieldCheck, tint: colors.pink },
+    { label: 'Storage used', value: formatBytes(stats.total_storage_used_bytes), Icon: HardDrive, tint: colors.emerald },
+    { label: 'Documents', value: String(stats.total_documents), sub: `${stats.total_tokens} tokens · ${stats.total_webhooks} webhooks`, Icon: FileText, tint: colors.amber },
   ] : []
 
   return (
@@ -123,31 +125,31 @@ export default function AdminScreen() {
         contentContainerStyle={{ gap: 16, paddingBottom: 24 }}
       >
         <View>
-          <Text style={styles.title}>Admin</Text>
-          <Text style={styles.subtitle}>Metadata only — document contents are never accessible here.</Text>
+          <Text style={[styles.title, { color: colors.ink }]}>Admin</Text>
+          <Text style={[styles.subtitle, { color: colors.inkSoft }]}>Metadata only — document contents are never accessible here.</Text>
         </View>
 
         {loading ? (
-          <Text style={styles.hint}>Loading…</Text>
+          <Text style={[styles.hint, { color: colors.inkMuted }]}>Loading…</Text>
         ) : (
           <>
             <View style={styles.statGrid}>
               {statCards.map((c) => (
                 <Card key={c.label} style={styles.statCard}>
-                  <c.Icon color={colorFor(c.color)} size={18} />
-                  <Text style={styles.statValue}>{c.value}</Text>
-                  <Text style={styles.statLabel}>{c.label}</Text>
-                  {c.sub ? <Text style={styles.statSub}>{c.sub}</Text> : null}
+                  <c.Icon color={c.tint} size={18} />
+                  <Text style={[styles.statValue, { color: colors.ink }]}>{c.value}</Text>
+                  <Text style={[styles.statLabel, { color: colors.inkSoft }]}>{c.label}</Text>
+                  {c.sub ? <Text style={[styles.statSub, { color: colors.inkMuted }]}>{c.sub}</Text> : null}
                 </Card>
               ))}
             </View>
 
             <Card style={{ gap: 14 }}>
-              <Text style={styles.section}>System settings</Text>
+              <Text style={[styles.section, { color: colors.ink }]}>System settings</Text>
               <View style={styles.settingRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>Public signups</Text>
-                  <Text style={styles.settingHint}>Allow new accounts to register.</Text>
+                  <Text style={[styles.settingLabel, { color: colors.ink }]}>Public signups</Text>
+                  <Text style={[styles.settingHint, { color: colors.inkSoft }]}>Allow new accounts to register.</Text>
                 </View>
                 <Switch
                   value={settings.signups_enabled}
@@ -162,21 +164,21 @@ export default function AdminScreen() {
                 </View>
                 <Button title="Save" variant="secondary" onPress={saveDefaultQuota} style={styles.saveBtn} />
               </View>
-              <Text style={styles.settingHint}>current: {formatBytes(settings.default_storage_quota_bytes)}</Text>
+              <Text style={[styles.settingHint, { color: colors.inkSoft }]}>current: {formatBytes(settings.default_storage_quota_bytes)}</Text>
             </Card>
 
             <Card style={{ gap: 10 }} >
-              <Text style={styles.section}>Users</Text>
+              <Text style={[styles.section, { color: colors.ink }]}>Users</Text>
               {users.map((u) => (
-                <View key={u.user_id} style={styles.userRow}>
+                <View key={u.user_id} style={[styles.userRow, { borderTopColor: colors.border }]}>
                   <View style={{ flex: 1, gap: 2 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                      <Text style={styles.userName} numberOfLines={1}>{u.username || u.email}</Text>
+                      <Text style={[styles.userName, { color: colors.ink }]} numberOfLines={1}>{u.username || u.email}</Text>
                       {u.is_admin ? <Badge label="admin" color="pink" /> : null}
                       {isSelf(u) ? <Badge label="you" color="slate" /> : null}
                     </View>
-                    <Text style={styles.userMeta} numberOfLines={1}>{u.email}</Text>
-                    <Text style={styles.userMeta}>
+                    <Text style={[styles.userMeta, { color: colors.inkMuted }]} numberOfLines={1}>{u.email}</Text>
+                    <Text style={[styles.userMeta, { color: colors.inkMuted }]}>
                       {formatBytes(u.storage_used_bytes)} / {formatBytes(u.storage_quota_bytes)} · {u.document_count} doc{u.document_count === 1 ? '' : 's'}
                     </Text>
                     <Badge label={u.is_active ? 'active' : 'disabled'} color={u.is_active ? 'emerald' : 'rose'} />
@@ -204,10 +206,10 @@ export default function AdminScreen() {
 
       {/* Quota modal */}
       <Modal visible={!!quotaUser} transparent animationType="fade" onRequestClose={() => setQuotaUser(null)}>
-        <Pressable style={styles.backdrop} onPress={() => setQuotaUser(null)}>
-          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.sheetTitle}>Set storage quota</Text>
-            <Text style={styles.settingHint} numberOfLines={1}>{quotaUser?.email}</Text>
+        <Pressable style={[styles.backdrop, { backgroundColor: colors.backdrop }]} onPress={() => setQuotaUser(null)}>
+          <Pressable style={[styles.sheet, { backgroundColor: colors.surface }]} onPress={(e) => e.stopPropagation()}>
+            <Text style={[styles.sheetTitle, { color: colors.ink }]}>Set storage quota</Text>
+            <Text style={[styles.settingHint, { color: colors.inkSoft }]} numberOfLines={1}>{quotaUser?.email}</Text>
             <Input label="Quota (GB)" value={quotaGb} onChangeText={setQuotaGb} keyboardType="numeric" style={{ marginTop: 10 }} />
             <View style={styles.sheetActions}>
               <Button title="Cancel" variant="secondary" onPress={() => setQuotaUser(null)} style={{ flex: 1 }} />
@@ -219,10 +221,10 @@ export default function AdminScreen() {
 
       {/* Delete confirm */}
       <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
-        <Pressable style={styles.backdrop} onPress={() => setDeleteTarget(null)}>
-          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.sheetTitle}>Delete user?</Text>
-            <Text style={styles.settingHint}>
+        <Pressable style={[styles.backdrop, { backgroundColor: colors.backdrop }]} onPress={() => setDeleteTarget(null)}>
+          <Pressable style={[styles.sheet, { backgroundColor: colors.surface }]} onPress={(e) => e.stopPropagation()}>
+            <Text style={[styles.sheetTitle, { color: colors.ink }]}>Delete user?</Text>
+            <Text style={[styles.settingHint, { color: colors.inkSoft }]}>
               Permanently delete <Text style={{ fontFamily: fonts.bodySemi, color: colors.ink }}>{deleteTarget?.email}</Text> and all their documents, pools, tokens, and webhooks. This can't be undone.
             </Text>
             <View style={styles.sheetActions}>
@@ -236,35 +238,28 @@ export default function AdminScreen() {
   )
 }
 
-function colorFor(c: 'indigo' | 'pink' | 'emerald' | 'amber') {
-  return { indigo: colors.indigo, pink: colors.pink, emerald: colors.emerald, amber: colors.amber }[c]
-}
-
 const styles = StyleSheet.create({
-  title: { fontFamily: fonts.display, fontSize: 24, color: colors.ink },
-  subtitle: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft, marginTop: 2 },
-  hint: { fontFamily: fonts.body, fontSize: 13, color: colors.inkMuted, textAlign: 'center', marginTop: 20 },
+  title: { fontFamily: fonts.display, fontSize: 24 },
+  subtitle: { fontFamily: fonts.body, fontSize: 13, marginTop: 2 },
+  hint: { fontFamily: fonts.body, fontSize: 13, textAlign: 'center', marginTop: 20 },
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   statCard: { width: '47%', gap: 4 },
-  statValue: { fontFamily: fonts.mono, fontSize: 20, color: colors.ink, marginTop: 6 },
-  statLabel: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft },
-  statSub: { fontFamily: fonts.body, fontSize: 11, color: colors.inkMuted },
-  section: { fontFamily: fonts.displaySemi, fontSize: 16, color: colors.ink },
+  statValue: { fontFamily: fonts.mono, fontSize: 20, marginTop: 6 },
+  statLabel: { fontFamily: fonts.body, fontSize: 13 },
+  statSub: { fontFamily: fonts.body, fontSize: 11 },
+  section: { fontFamily: fonts.displaySemi, fontSize: 16 },
   settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  settingLabel: { fontFamily: fonts.bodyMedium, fontSize: 14, color: colors.ink },
-  settingHint: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
+  settingLabel: { fontFamily: fonts.bodyMedium, fontSize: 14 },
+  settingHint: { fontFamily: fonts.body, fontSize: 12 },
   quotaRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   saveBtn: { marginBottom: 4 },
-  userRow: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
-    borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 10,
-  },
-  userName: { fontFamily: fonts.bodySemi, fontSize: 14, color: colors.ink, flexShrink: 1 },
-  userMeta: { fontFamily: fonts.body, fontSize: 11, color: colors.inkMuted },
+  userRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderTopWidth: 1, paddingTop: 10 },
+  userName: { fontFamily: fonts.bodySemi, fontSize: 14, flexShrink: 1 },
+  userMeta: { fontFamily: fonts.body, fontSize: 11 },
   userActions: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingTop: 2 },
   actionText: { fontFamily: fonts.bodySemi, fontSize: 12 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(30,27,46,0.4)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  sheet: { width: '100%', maxWidth: 420, backgroundColor: colors.surface, borderRadius: radius.lg, padding: 20, gap: 4 },
-  sheetTitle: { fontFamily: fonts.displaySemi, fontSize: 17, color: colors.ink, marginBottom: 4 },
+  backdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
+  sheet: { width: '100%', maxWidth: 420, borderRadius: radius.lg, padding: 20, gap: 4 },
+  sheetTitle: { fontFamily: fonts.displaySemi, fontSize: 17, marginBottom: 4 },
   sheetActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
 })

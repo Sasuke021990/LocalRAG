@@ -1,20 +1,24 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
-import { colors, fonts, radius } from '../../theme/tokens'
+import { useAppTheme } from '../../theme/ThemeContext'
+import { fonts, radius, type ColorTokens } from '../../theme/tokens'
 
 type Color = 'indigo' | 'pink' | 'emerald' | 'amber' | 'rose' | 'slate'
 
-const map: Record<Color, { bg: string; fg: string }> = {
-  indigo: { bg: colors.indigoSoft, fg: colors.indigo },
-  pink: { bg: colors.pinkSoft, fg: colors.pink },
-  emerald: { bg: colors.emeraldSoft, fg: colors.emerald },
-  amber: { bg: colors.amberSoft, fg: colors.amber },
-  rose: { bg: colors.roseSoft, fg: colors.rose },
-  slate: { bg: 'rgba(107,104,128,0.12)', fg: colors.inkSoft },
+function tone(colors: ColorTokens, c: Color): { bg: string; fg: string } {
+  switch (c) {
+    case 'pink': return { bg: colors.pinkSoft, fg: colors.pink }
+    case 'emerald': return { bg: colors.emeraldSoft, fg: colors.emerald }
+    case 'amber': return { bg: colors.amberSoft, fg: colors.amber }
+    case 'rose': return { bg: colors.roseSoft, fg: colors.rose }
+    case 'slate': return { bg: colors.slateSoft, fg: colors.inkSoft }
+    default: return { bg: colors.indigoSoft, fg: colors.indigo }
+  }
 }
 
 export default function Badge({ label, color = 'indigo', icon }: { label: string; color?: Color; icon?: React.ReactNode }) {
-  const c = map[color]
+  const { colors } = useAppTheme()
+  const c = tone(colors, color)
   return (
     <View style={[styles.pill, { backgroundColor: c.bg }, icon ? styles.pillWithIcon : null]}>
       {icon}

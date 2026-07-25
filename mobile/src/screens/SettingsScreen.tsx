@@ -9,11 +9,13 @@ import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { colors, fonts } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts } from '../theme/tokens'
 
 export default function SettingsScreen() {
   const nav = useNavigation<any>()
   const qc = useQueryClient()
+  const { colors } = useAppTheme()
   const { user, logout, deleteAccount } = useAuthStore()
   const [cur, setCur] = useState('')
   const [next, setNext] = useState('')
@@ -72,21 +74,21 @@ export default function SettingsScreen() {
 
   return (
     <Screen>
-      <Text style={styles.title}>Settings</Text>
-      <Text style={styles.email}>{user?.email}</Text>
+      <Text style={[styles.title, { color: colors.ink }]}>Settings</Text>
+      <Text style={[styles.email, { color: colors.inkSoft }]}>{user?.email}</Text>
 
       <Card style={{ gap: 12 }}>
-        <Text style={styles.section}>Change password</Text>
+        <Text style={[styles.section, { color: colors.ink }]}>Change password</Text>
         <Input label="Current password" value={cur} onChangeText={setCur} secureTextEntry />
         <Input label="New password" value={next} onChangeText={setNext} secureTextEntry />
         <Input label="Confirm new password" value={confirm} onChangeText={setConfirm} secureTextEntry />
-        {err ? <Text style={styles.err}>{err}</Text> : null}
+        {err ? <Text style={[styles.err, { color: colors.rose }]}>{err}</Text> : null}
         <Button title="Update password" onPress={save} loading={saving} />
       </Card>
 
       {user?.is_admin ? (
         <Card style={{ gap: 12 }}>
-          <Text style={styles.section}>Admin</Text>
+          <Text style={[styles.section, { color: colors.ink }]}>Admin</Text>
           <Button title="Open admin panel" variant="secondary" onPress={() => nav.navigate('Admin')} />
         </Card>
       ) : null}
@@ -102,7 +104,7 @@ export default function SettingsScreen() {
           <Button title="Delete account" variant="danger" onPress={() => setShowDelete(true)} />
         ) : (
           <>
-            <Text style={styles.deleteWarning}>
+            <Text style={[styles.deleteWarning, { color: colors.inkSoft }]}>
               This permanently deletes your account and everything in it — documents, pools, conversations, and
               API tokens. This cannot be undone.
             </Text>
@@ -112,23 +114,23 @@ export default function SettingsScreen() {
               onChangeText={setDeletePassword}
               secureTextEntry
             />
-            {deleteErr ? <Text style={styles.err}>{deleteErr}</Text> : null}
+            {deleteErr ? <Text style={[styles.err, { color: colors.rose }]}>{deleteErr}</Text> : null}
             <Button title="Permanently delete my account" variant="danger" onPress={confirmDelete} loading={deleting} />
             <Button title="Cancel" variant="secondary" onPress={() => { setShowDelete(false); setDeletePassword(''); setDeleteErr('') }} />
           </>
         )}
       </Card>
 
-      <Text style={styles.version}>Vaultly · v1.0.0</Text>
+      <Text style={[styles.version, { color: colors.inkMuted }]}>Vaultly · v1.0.0</Text>
     </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  title: { fontFamily: fonts.display, fontSize: 24, color: colors.ink },
-  email: { fontFamily: fonts.body, fontSize: 14, color: colors.inkSoft, marginBottom: 4 },
-  section: { fontFamily: fonts.displaySemi, fontSize: 16, color: colors.ink },
-  err: { fontFamily: fonts.body, fontSize: 13, color: colors.rose },
-  deleteWarning: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft, lineHeight: 19 },
-  version: { fontFamily: fonts.body, fontSize: 12, color: colors.inkMuted, textAlign: 'center', marginTop: 8 },
+  title: { fontFamily: fonts.display, fontSize: 24 },
+  email: { fontFamily: fonts.body, fontSize: 14, marginBottom: 4 },
+  section: { fontFamily: fonts.displaySemi, fontSize: 16 },
+  err: { fontFamily: fonts.body, fontSize: 13 },
+  deleteWarning: { fontFamily: fonts.body, fontSize: 13, lineHeight: 19 },
+  version: { fontFamily: fonts.body, fontSize: 12, textAlign: 'center', marginTop: 8 },
 })

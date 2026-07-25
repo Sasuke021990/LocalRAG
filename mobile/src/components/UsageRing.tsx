@@ -2,11 +2,13 @@ import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import Svg, { Circle, Defs, LinearGradient, Stop } from 'react-native-svg'
 import { useUsageStore } from '../stores/usageStore'
-import { colors, fonts } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts } from '../theme/tokens'
 import { formatBytes } from '../utils/format'
 
 export default function UsageRing({ size = 140, stroke = 12 }: { size?: number; stroke?: number }) {
   const usage = useUsageStore()
+  const { colors } = useAppTheme()
   const pct = usage.percentUsed()
   const r = (size - stroke) / 2
   const circumference = 2 * Math.PI * r
@@ -31,11 +33,11 @@ export default function UsageRing({ size = 140, stroke = 12 }: { size?: number; 
           />
         </Svg>
         <View style={styles.center}>
-          <Text style={styles.pct}>{Math.round(pct)}%</Text>
-          <Text style={styles.used}>used</Text>
+          <Text style={[styles.pct, { color: colors.indigo }]}>{Math.round(pct)}%</Text>
+          <Text style={[styles.used, { color: colors.inkMuted }]}>used</Text>
         </View>
       </View>
-      <Text style={styles.caption}>
+      <Text style={[styles.caption, { color: colors.inkSoft }]}>
         <Text style={{ fontFamily: fonts.bodySemi, color: colors.ink }}>{formatBytes(usage.storageUsedBytes)}</Text>
         {'  of '}{formatBytes(usage.storageQuotaBytes)}
       </Text>
@@ -45,7 +47,7 @@ export default function UsageRing({ size = 140, stroke = 12 }: { size?: number; 
 
 const styles = StyleSheet.create({
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  pct: { fontFamily: fonts.mono, fontSize: 24, color: colors.indigo },
-  used: { fontFamily: fonts.body, fontSize: 12, color: colors.inkMuted },
-  caption: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft, marginTop: 12 },
+  pct: { fontFamily: fonts.mono, fontSize: 24 },
+  used: { fontFamily: fonts.body, fontSize: 12 },
+  caption: { fontFamily: fonts.body, fontSize: 13, marginTop: 12 },
 })

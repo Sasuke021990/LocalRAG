@@ -133,6 +133,80 @@ async def extract_graph_elements(chunks: List[str], llm) -> Tuple[List[str], Lis
     return _parse_graph_json("".join(parts).strip())
 
 
+async def _stream_pool_summary(
+    *, user_id: str, query: str, pool: str, llm, list_documents_fn,
+) -> AsyncIterator[Tuple[str, Any]]:
+    """
+    Whole-pool "summarize the documents" path (see ``grounding.is_pool_summary_request``):
+    uses each document's already-generated summary instead of chunk retrieval,
+    so a document that would have scored too low to make the top-K rerank
+    window still gets represented in the answer.
+    """
+    docs = [d for d in list_documents_fn(user_id) if not pool or d.get("pool") == pool]
+    if not docs:
+        message = grounding.NO_RESULTS_MESSAGE
+        yield ("sources", [])
+        yield ("refusal", message)
+        yield ("done", {"answer": message, "reasoning": "", "sources": [], "refused": True, "cached": False})
+        return
+
+    sources = [
+        {
+            "file_name": d.get("file_name", "Unknown"),
+            "pool": d.get("pool") or "General",
+            "chunk_index": 0,
+            "score": 1.0,
+            "content": d.get("summary", ""),
+        }
+        for d in docs
+    ]
+    yield ("sources", sources)
+
+    summarized = [(d.get("file_name", "Unknown"), d["summary"]) for d in docs if d.get("summary")]
+    if not summarized:
+        # Documents exist but the background summarization pass hasn't
+        # finished yet (or the LLM was disabled when they were uploaded).
+        message = (
+            "Your documents are still being processed, so summaries aren't ready "
+            "yet — try again in a moment."
+        )
+        yield ("refusal", message)
+        yield ("done", {"answer": message, "reasoning": "", "sources": sources, "refused": True, "cached": False})
+        return
+
+    if not getattr(llm, "ready", False):
+        answer = "\n\n".join(f"**{name}**: {summary}" for name, summary in summarized)
+        yield ("token", answer)
+        yield ("done", {"answer": answer, "reasoning": "", "sources": sources, "refused": False, "cached": False})
+        return
+
+    system_prompt = grounding.build_pool_summary_prompt(summarized, thinking=config.LLM_THINKING_ENABLED)
+    model_query = query + grounding.thinking_directive(config.LLM_THINKING_ENABLED)
+    splitter = grounding.ThinkingStreamSplitter()
+    answer_parts: List[str] = []
+    reasoning_parts: List[str] = []
+
+    async for token in llm.generate_stream(system_prompt, model_query):
+        for phase, text in splitter.feed(token):
+            if phase == "thinking":
+                reasoning_parts.append(text)
+                yield ("thinking", text)
+            else:
+                answer_parts.append(text)
+                yield ("token", text)
+    for phase, text in splitter.flush():
+        if phase == "thinking":
+            reasoning_parts.append(text)
+            yield ("thinking", text)
+        else:
+            answer_parts.append(text)
+            yield ("token", text)
+
+    answer = "".join(answer_parts).strip() or "\n\n".join(f"**{name}**: {summary}" for name, summary in summarized)
+    reasoning = "".join(reasoning_parts).strip()
+    yield ("done", {"answer": answer, "reasoning": reasoning, "sources": sources, "refused": False, "cached": False})
+
+
 async def stream_answer(
     *,
     user_id: str,
@@ -145,6 +219,7 @@ async def stream_answer(
     llm,
     pool: str = None,
     history: List[Dict[str, str]] = None,
+    list_documents_fn=None,
 ) -> AsyncIterator[Tuple[str, Any]]:
     # Cache is scoped per (user, pool): the same question answered against a
     # different pool must not serve a cross-pool cached answer.
@@ -177,6 +252,17 @@ async def stream_answer(
             "answer": reply, "reasoning": "", "sources": [],
             "refused": False, "cached": False,
         })
+        return
+
+    # 1c. Whole-pool summary request — bypasses chunk retrieval entirely (see
+    # _stream_pool_summary's docstring for why). Not cached: these are rare,
+    # one-off asks, and skipping the cache keeps the answer fresh against
+    # documents added/removed since the last summary request.
+    if list_documents_fn is not None and grounding.is_pool_summary_request(query):
+        async for event in _stream_pool_summary(
+            user_id=user_id, query=query, pool=pool, llm=llm, list_documents_fn=list_documents_fn,
+        ):
+            yield event
         return
 
     # 2. Retrieve + rerank (restricted to the selected pool when one is given).
@@ -251,13 +337,13 @@ async def stream_answer(
     yield ("done", {"answer": answer, "reasoning": reasoning, "sources": sources, "refused": False, "cached": False})
 
 
-async def answer_query(*, user_id, query, top_k, rerank_top_k, hybrid_search, reranker, semantic_cache, llm, pool=None, history=None) -> Dict[str, Any]:
+async def answer_query(*, user_id, query, top_k, rerank_top_k, hybrid_search, reranker, semantic_cache, llm, pool=None, history=None, list_documents_fn=None) -> Dict[str, Any]:
     """Non-streaming: drain ``stream_answer`` into a final dict."""
     final = {"answer": "", "reasoning": "", "sources": [], "refused": False}
     async for event, data in stream_answer(
         user_id=user_id, query=query, top_k=top_k, rerank_top_k=rerank_top_k,
         hybrid_search=hybrid_search, reranker=reranker, semantic_cache=semantic_cache, llm=llm, pool=pool,
-        history=history,
+        history=history, list_documents_fn=list_documents_fn,
     ):
         if event == "done":
             final = {k: data[k] for k in ("answer", "reasoning", "sources", "refused")}

@@ -432,6 +432,25 @@ async def move_document(
 
 # ─── Knowledge graph ────────────────────────────────────────────────────────────
 
+@app.get("/graph", tags=["Pools"], summary="Concept graph across all pools")
+async def user_graph(user_id: str = Depends(require_current_user)):
+    """
+    One merged graph of every concept/relationship extracted from **all** of
+    this user's documents, regardless of which pool they live in.
+
+    Pools scope *retrieval*; concepts aren't pool-specific, and the per-pool
+    view (``/pools/{pool}/graph``, still available for the web client) made a
+    document uploaded to pool A invisible while viewing pool B. Same Pro+
+    gate and same response shape as the per-pool endpoint.
+    """
+    if not billing_plans.has_feature(billing_store.get_plan(auth_redis_client, user_id), "knowledge_graph"):
+        raise HTTPException(status_code=403, detail="The knowledge graph is available on Pro and above.")
+    try:
+        return graph_store.get_user_graph(ingestion_pipeline.redis_client, user_id)
+    except Exception as exc:
+        raise _internal_error(exc, "Failed to load knowledge graph")
+
+
 @app.get("/pools/{pool}/graph", tags=["Pools"], summary="Concept graph for a pool")
 async def pool_graph(pool: str, user_id: str = Depends(require_current_user)):
     """
@@ -680,10 +699,24 @@ def _resolve_conversation(user_id: str, request: QueryRequest) -> Dict[str, Any]
     )
 
 
-def _history_from(conv: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Prior turns only (this conversation's messages *before* the current
-    one, which hasn't been appended yet) as the {role, content} shape the
-    generation pipeline expects."""
+def _history_from(conv: Dict[str, Any], request_pool: Optional[str]) -> List[Dict[str, str]]:
+    """
+    Prior turns only (this conversation's messages *before* the current one,
+    which hasn't been appended yet) as the {role, content} shape the
+    generation pipeline expects.
+
+    Returns no history at all if ``request_pool`` differs from the
+    conversation's last-used pool (``conv["pool"]``, updated on every
+    assistant turn — see ``_persist_turn``). A client can resubmit the same
+    ``conversation_id`` after switching pools via the pool picker without
+    starting a new chat (mobile's ``choosePool()`` doesn't reset the active
+    conversation) — retrieval/sources are always correctly scoped to the new
+    pool, but threading in prior turns that discuss a *different* pool's
+    documents biased the model's answer toward that old content even though
+    it cited the new pool's sources.
+    """
+    if (request_pool or "") != (conv.get("pool") or ""):
+        return []
     return [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
 
 
@@ -732,7 +765,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
 
         conv = _resolve_conversation(user_id, request)
-        history = _history_from(conv)
+        history = _history_from(conv, request.pool)
 
         start = asyncio.get_event_loop().time()
         result = await answer_pipeline.answer_query(
@@ -741,6 +774,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
             hybrid_search=hybrid_search, reranker=reranker,
             semantic_cache=semantic_cache, llm=local_llm,
             pool=request.pool or None, history=history,
+            list_documents_fn=ingestion_pipeline.list_documents,
         )
         _persist_turn(user_id, conv["id"], request.query, result, request.pool)
 
@@ -786,7 +820,7 @@ async def query_stream(http_request: Request, request: QueryRequest, user_id: st
     quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
 
     conv = _resolve_conversation(user_id, request)
-    history = _history_from(conv)
+    history = _history_from(conv, request.pool)
 
     async def _events():
         final_data = None
@@ -796,6 +830,7 @@ async def query_stream(http_request: Request, request: QueryRequest, user_id: st
             hybrid_search=hybrid_search, reranker=reranker,
             semantic_cache=semantic_cache, llm=local_llm,
             pool=request.pool or None, history=history,
+            list_documents_fn=ingestion_pipeline.list_documents,
         )
         try:
             async for event, data in agen:
@@ -835,13 +870,32 @@ async def stream_progress(task_id: str, user_id: str = Depends(require_current_u
     """
     async def _generator():
         last = None
-        # ~2 minutes at the polling interval below — generous for even a slow
-        # image-OCR + embed pass; the client can just retry if it's cut short.
-        for _ in range(300):
+        seen = False
+        misses = 0
+        # ~15 minutes at the polling interval below. This used to be ~2
+        # minutes, and a large document's embed pass (CPU, thousands of
+        # chunks) routinely outlived it — the stream then just *ended* with
+        # no terminal event, so the client's progress bar silently vanished
+        # while the server was still working. The ingestion pipeline now
+        # also refreshes the progress entry every embedding batch, so a
+        # legitimately-running task never looks abandoned here.
+        for _ in range(2250):
             entry = upload_progress.get_progress(auth_redis_client, task_id)
             if entry is None:
+                misses += 1
+                # Never-seen: give the background task a moment to write its
+                # first entry. Seen-then-vanished: the entry's TTL expired or
+                # was cleared — either way, end with a terminal event rather
+                # than leaving the client to infer meaning from silence.
+                if (seen and misses >= 5) or (not seen and misses >= 50):
+                    yield {"event": "error", "data": json.dumps(
+                        {"detail": "Progress unavailable — the document may still be processing; check your documents shortly."}
+                    )}
+                    return
                 await asyncio.sleep(0.4)
                 continue
+            misses = 0
+            seen = True
             if entry.get("user_id") != user_id:
                 # Don't leak another user's task existence/progress.
                 yield {"event": "error", "data": json.dumps({"detail": "Task not found"})}
@@ -856,6 +910,10 @@ async def stream_progress(task_id: str, user_id: str = Depends(require_current_u
                 if terminal:
                     return
             await asyncio.sleep(0.4)
+        # Window exhausted with the task still running — terminal event, not silence.
+        yield {"event": "error", "data": json.dumps(
+            {"detail": "Still processing — this is taking longer than expected. The document will appear once it's done."}
+        )}
 
     return EventSourceResponse(_generator())
 

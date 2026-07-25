@@ -74,6 +74,81 @@ class TestParsers:
         assert pipeline.validate_file_type("doc.exe") is False
 
 
+class TestIngestionProgressReporting:
+    """
+    A large document used to freeze the progress bar twice: once through the
+    whole embedding pass (one monolithic encode call) and again through the
+    per-chunk Redis vector indexing (a round trip each, silent throughout).
+    Both now report incrementally, and the indexing writes are pipelined.
+    """
+    USER = "progress-user"
+
+    def test_chunk_indexing_reports_progress_and_indexes_every_chunk(self, pipeline, monkeypatch):
+        # NB: the `pipeline` fixture stubs vector_index.index_chunk to a
+        # no-op (see conftest's no_vector_index), so asserting on Redis keys
+        # here would pass vacuously. Spy on the call instead — that captures
+        # both "every chunk was submitted" and "it was batched onto a
+        # Pipeline rather than the raw client", which is the actual change.
+        import ingestion.pipeline as pipeline_module
+
+        calls = []
+        monkeypatch.setattr(
+            pipeline_module.vector_index, "index_chunk",
+            lambda client, uid, pool, fn, idx, content, emb: calls.append((type(client).__name__, idx)),
+        )
+
+        total = 1200  # comfortably past the 500-per-batch pipeline size
+        chunks = [f"chunk number {i}" for i in range(total)]
+        embeddings = [[float(i), 0.0] for i in range(total)]
+        seen = []
+
+        pipeline._store_in_redis(
+            "/tmp/big.pdf", chunks, embeddings, "General", self.USER,
+            progress_callback=lambda pct, msg: seen.append((pct, msg)),
+        )
+
+        indexing = [(p, m) for p, m in seen if "Indexing chunks" in m]
+        assert indexing, "expected incremental progress during chunk indexing"
+        # Confined to the storage slice of the pipeline, and monotonic.
+        assert all(70 <= p <= 85 for p, _ in indexing)
+        assert [p for p, _ in indexing] == sorted(p for p, _ in indexing)
+
+        # Batching must not drop or reorder writes.
+        assert [idx for _, idx in calls] == list(range(total))
+        # ...and they must go through a Pipeline, not one round trip each.
+        assert {kind for kind, _ in calls} == {"Pipeline"}
+
+    def test_small_document_skips_noisy_per_batch_updates(self, pipeline, redis_client):
+        seen = []
+        pipeline._store_in_redis(
+            "/tmp/small.pdf", ["only chunk"], [[0.1, 0.2]], "General", self.USER,
+            progress_callback=lambda pct, msg: seen.append((pct, msg)),
+        )
+        assert [m for _, m in seen if "Indexing chunks" in m] == []
+
+    def test_embedding_reports_progress_for_a_large_document(self, pipeline):
+        class _FakeModel:
+            def encode(self, batch):
+                import numpy as np
+                return [np.array([0.1, 0.2]) for _ in batch]
+
+        original, pipeline.model = pipeline.model, _FakeModel()
+        try:
+            seen = []
+            out = pipeline._generate_embeddings(
+                [f"chunk {i}" for i in range(1000)],
+                progress_callback=lambda pct, msg: seen.append((pct, msg)),
+            )
+        finally:
+            pipeline.model = original
+
+        assert len(out) == 1000
+        embedding = [(p, m) for p, m in seen if "Embedding chunks" in m]
+        assert embedding, "expected incremental progress during embedding"
+        assert all(50 <= p <= 70 for p, _ in embedding)
+        assert [p for p, _ in embedding] == sorted(p for p, _ in embedding)
+
+
 class TestStorageRoundTrip:
     USER_A = "user-aaa"
     USER_B = "user-bbb"

@@ -1,12 +1,13 @@
 import React, { useEffect } from 'react'
 import { View, ActivityIndicator } from 'react-native'
 import { useAuthStore } from '../stores/authStore'
-import { colors } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
 import AuthStack from './AuthStack'
 import AppStack from './AppStack'
 
 export default function RootNavigator() {
   const { checked, user, hydrate } = useAuthStore()
+  const { colors } = useAppTheme()
 
   useEffect(() => {
     hydrate()

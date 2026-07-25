@@ -3,7 +3,8 @@ import { View, Text, StyleSheet } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { AlertTriangle } from 'lucide-react-native'
 import Button from './ui/Button'
-import { colors, fonts } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts } from '../theme/tokens'
 
 interface Props {
   children: React.ReactNode
@@ -31,31 +32,36 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   reset = () => this.setState({ error: null })
 
   render() {
-    if (this.state.error) {
-      return (
-        <SafeAreaView style={styles.safe}>
-          <View style={styles.wrap}>
-            <View style={styles.chip}><AlertTriangle color={colors.rose} size={26} /></View>
-            <Text style={styles.title}>Something went wrong</Text>
-            <Text style={styles.body}>
-              An unexpected error occurred. You can try again — if it keeps happening, restarting the app usually helps.
-            </Text>
-            <Button title="Try again" onPress={this.reset} style={{ alignSelf: 'stretch' }} />
-          </View>
-        </SafeAreaView>
-      )
-    }
+    if (this.state.error) return <ErrorFallback error={this.state.error} onReset={this.reset} />
     return this.props.children
   }
 }
 
+// A class component can't call hooks itself, so the themed fallback UI lives
+// in its own function component -- ErrorBoundary must sit below ThemeProvider
+// in App.tsx for this to have a theme to read.
+function ErrorFallback({ error, onReset }: { error: Error; onReset: () => void }) {
+  const { colors } = useAppTheme()
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]}>
+      <View style={styles.wrap}>
+        <View style={[styles.chip, { backgroundColor: colors.roseSoft }]}><AlertTriangle color={colors.rose} size={26} /></View>
+        <Text style={[styles.title, { color: colors.ink }]}>Something went wrong</Text>
+        <Text style={[styles.body, { color: colors.inkSoft }]}>
+          An unexpected error occurred. You can try again — if it keeps happening, restarting the app usually helps.
+        </Text>
+        {__DEV__ ? <Text style={[styles.debug, { color: colors.rose }]}>{error.message}</Text> : null}
+        <Button title="Try again" onPress={onReset} style={{ alignSelf: 'stretch' }} />
+      </View>
+    </SafeAreaView>
+  )
+}
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.canvas },
+  safe: { flex: 1 },
   wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32 },
-  chip: {
-    width: 56, height: 56, borderRadius: 18, backgroundColor: 'rgba(244,63,94,0.10)',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 4,
-  },
-  title: { fontFamily: fonts.displaySemi, fontSize: 18, color: colors.ink },
-  body: { fontFamily: fonts.body, fontSize: 14, color: colors.inkSoft, textAlign: 'center', lineHeight: 20 },
+  chip: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  title: { fontFamily: fonts.displaySemi, fontSize: 18 },
+  body: { fontFamily: fonts.body, fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  debug: { fontFamily: fonts.mono, fontSize: 11, textAlign: 'center' },
 })

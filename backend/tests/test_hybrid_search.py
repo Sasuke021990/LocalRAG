@@ -57,6 +57,60 @@ class TestBM25:
         assert engine.search_bm25(USER_B, "apple") == []
 
 
+class TestPoolScopedSearch:
+    """
+    Regression for a variable-shadowing bug in ``search()``: the BM25
+    auto-load loop assigned each document's pool to a local named ``pool``,
+    clobbering the method's ``pool`` *parameter* — so on every cold-cache
+    query (first query after a process restart, or after ``invalidate_bm25``
+    on upload/delete/move) retrieval was silently re-scoped to whichever
+    document Redis iterated last, not the pool the user selected.
+    """
+
+    def _seed(self, redis_client, user_id):
+        import json
+        # "fruit" appears in exactly one document per pool. The filler docs
+        # matter: BM25Okapi's IDF is log((N-df+0.5)/(df+0.5)) and with df=2
+        # out of N=4 that's log(1)=0 — every hit would be dropped by the
+        # score>0 cutoff before the pool filter is even exercised. Six docs
+        # keeps the term's IDF comfortably positive.
+        docs = {
+            "one.txt": ("PoolA", ["apple orchards produce fruit every autumn near the orchard barn"]),
+            "two.txt": ("PoolB", ["banana plantations thrive in tropical fruit growing climates"]),
+            "three.txt": ("PoolA", ["the stock market fluctuates based on economic indicators"]),
+            "four.txt": ("PoolB", ["the museum exhibit features ancient pottery collections"]),
+            "five.txt": ("PoolA", ["mountain hiking requires proper equipment and preparation"]),
+            "six.txt": ("PoolB", ["quarterly earnings reports were released late yesterday"]),
+        }
+        for file_name, (doc_pool, chunks) in docs.items():
+            redis_client.set(
+                f"document:{user_id}:{doc_pool}:{file_name}",
+                json.dumps({"file_name": file_name, "pool": doc_pool, "chunks": chunks}),
+            )
+
+    def test_cold_cache_search_honors_requested_pool_for_every_pool(self, engine, redis_client):
+        user = "pool-scope-user"
+        self._seed(redis_client, user)
+
+        # "fruit" appears in documents of BOTH pools, so whichever pool the
+        # filter actually lands on will produce results — the assertion is on
+        # *which* pool those results came from.
+        for requested in ("PoolA", "PoolB"):
+            engine.invalidate_bm25(user)  # force the auto-load (clobber) path each time
+            results = engine.search(user, "fruit", top_k=5, pool=requested)
+            assert results, f"expected hits for {requested}"
+            assert all(r.metadata.get("pool") == requested for r in results), (
+                f"asked for {requested}, got pools "
+                f"{[r.metadata.get('pool') for r in results]}"
+            )
+
+    def test_unpooled_search_still_spans_all_pools(self, engine, redis_client):
+        user = "pool-scope-user-2"
+        self._seed(redis_client, user)
+        results = engine.search(user, "fruit", top_k=5, pool=None)
+        assert {r.metadata.get("pool") for r in results} == {"PoolA", "PoolB"}
+
+
 class TestFusion:
     def test_fuse_results_deduplicates_and_boosts_overlap(self, engine):
         shared = SearchResult(content="shared content", score=1.0, metadata={}, source="bm25")

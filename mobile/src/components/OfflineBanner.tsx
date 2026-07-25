@@ -3,7 +3,8 @@ import { View, Text, StyleSheet } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNetInfo } from '@react-native-community/netinfo'
 import { WifiOff } from 'lucide-react-native'
-import { colors, fonts } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts } from '../theme/tokens'
 
 // Renders a thin persistent strip whenever the device has no network
 // connection, so airplane mode / a dead connection reads as "you're
@@ -13,11 +14,12 @@ import { colors, fonts } from '../theme/tokens'
 export default function OfflineBanner() {
   const { isConnected } = useNetInfo()
   const insets = useSafeAreaInsets()
+  const { colors } = useAppTheme()
 
   if (isConnected !== false) return null
 
   return (
-    <View style={[styles.bar, { paddingTop: insets.top + 6 }]} pointerEvents="none">
+    <View style={[styles.bar, { paddingTop: insets.top + 6, backgroundColor: colors.rose }]} pointerEvents="none">
       <WifiOff color="#fff" size={14} />
       <Text style={styles.text}>You're offline — some things won't load</Text>
     </View>
@@ -31,7 +33,7 @@ const styles = StyleSheet.create({
   bar: {
     position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: colors.rose, paddingBottom: 8,
+    paddingBottom: 8,
   },
   text: { fontFamily: fonts.bodyMedium, fontSize: 12, color: '#fff' },
 })

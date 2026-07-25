@@ -319,12 +319,20 @@ class HybridSearchEngine:
                     except Exception:
                         continue
                     file_name = doc.get('file_name', 'Unknown')
-                    pool      = doc.get('pool') or doc.get('category') or 'General'
+                    # NB: must NOT be named `pool` — that would shadow this
+                    # method's `pool` parameter, silently replacing the
+                    # caller's selected pool with whichever document Redis
+                    # iterated last. Because this block only runs when the
+                    # BM25 cache is cold (first query after a process restart
+                    # or after invalidate_bm25 on upload/delete/move), the
+                    # resulting cross-pool leak was intermittent and looked
+                    # like retrieval randomly ignoring the pool picker.
+                    doc_pool = doc.get('pool') or doc.get('category') or 'General'
                     for ci, chunk_text in enumerate(doc.get('chunks', [])):
                         docs_for_bm25.append({
                             'content':     chunk_text,
                             'file_name':   file_name,
-                            'pool':        pool,
+                            'pool':        doc_pool,
                             'chunk_index': ci,
                         })
                 if docs_for_bm25:

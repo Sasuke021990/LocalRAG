@@ -148,6 +148,60 @@ class TestSummaryPromptBuilder:
         assert "…" in p
 
 
+class TestPoolSummaryDetection:
+    @pytest.mark.parametrize("msg", [
+        "summarize the pool",
+        "summarise the pool",
+        "summarize all my documents",
+        "summarise my documents please",
+        "give me an overview of the pool",
+        "give me an overview of my documents",
+        "documents overview",
+        "pool summary",
+        "recap the documents",
+        "summarize everything",
+        "Summarize The Pool",
+    ])
+    def test_pool_summary_requests_detected(self, msg):
+        assert grounding.is_pool_summary_request(msg) is True
+
+    @pytest.mark.parametrize("msg", [
+        "what is the refund policy?",
+        "summarize the refund policy document",
+        "can you summarize what this document says about refunds",
+        "summarize this file",
+        "hi",
+        "",
+    ])
+    def test_specific_topic_questions_not_detected(self, msg):
+        # Singular "document"/"file" is a specific-topic ask that chunk
+        # retrieval handles fine -- must not be misrouted to the whole-pool
+        # summary path.
+        assert grounding.is_pool_summary_request(msg) is False
+
+
+class TestPoolSummaryPromptBuilder:
+    def test_prompt_contains_all_document_names_and_summaries(self):
+        p = grounding.build_pool_summary_prompt([
+            ("alpha.pdf", "alpha is about widgets"),
+            ("beta.pdf", "beta is about gadgets"),
+        ])
+        assert "alpha.pdf" in p and "alpha is about widgets" in p
+        assert "beta.pdf" in p and "beta is about gadgets" in p
+
+    def test_instructs_model_to_cover_every_document(self):
+        p = grounding.build_pool_summary_prompt([("a.pdf", "x")])
+        assert "every document" in p.lower() or "don't focus on" in p.lower()
+
+    def test_empty_summaries_still_builds(self):
+        p = grounding.build_pool_summary_prompt([])
+        assert "(no summaries available)" in p
+
+    def test_thinking_flag_adds_reasoning_instruction(self):
+        p = grounding.build_pool_summary_prompt([("a.pdf", "x")], thinking=True)
+        assert "<think>" in p
+
+
 class TestThinkingDirective:
     def test_thinking_true_appends_think(self):
         assert grounding.thinking_directive(True) == " /think"

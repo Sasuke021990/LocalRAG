@@ -8,7 +8,8 @@ import ChatBubble from '../components/ChatBubble'
 import PoolPickerModal from '../components/PoolPickerModal'
 import { useChatStore } from '../stores/chatStore'
 import { fetchPools } from '../api/documents'
-import { colors, fonts, radius } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts, radius } from '../theme/tokens'
 
 export default function ChatScreen() {
   const navigation = useNavigation<any>()
@@ -18,6 +19,7 @@ export default function ChatScreen() {
   const poolChosen = useChatStore((s) => s.poolChosen)
   const choosePool = useChatStore((s) => s.choosePool)
   const submit = useChatStore((s) => s.submit)
+  const { colors } = useAppTheme()
 
   const [text, setText] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -45,12 +47,15 @@ export default function ChatScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]} edges={['top']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.header}>
-          <Pressable style={styles.poolPill} onPress={() => setPickerOpen(true)}>
+        <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
+          <Pressable
+            style={[styles.poolPill, { borderColor: colors.border, backgroundColor: colors.indigoSoft }]}
+            onPress={() => setPickerOpen(true)}
+          >
             <FolderOpen color={colors.indigo} size={14} />
-            <Text style={styles.poolPillText} numberOfLines={1}>{pool || 'All pools'}</Text>
+            <Text style={[styles.poolPillText, { color: colors.indigo }]} numberOfLines={1}>{pool || 'All pools'}</Text>
             <ChevronDown color={colors.indigo} size={14} />
           </Pressable>
           <Pressable style={styles.historyBtn} onPress={() => navigation.navigate('Conversations')} hitSlop={8}>
@@ -60,9 +65,9 @@ export default function ChatScreen() {
 
         {history.length === 0 ? (
           <View style={styles.emptyWrap}>
-            <View style={styles.emptyChip}><Sparkles color={colors.pink} size={26} /></View>
-            <Text style={styles.emptyTitle}>Ask anything about your documents</Text>
-            <Text style={styles.emptyBody}>Answers come only from your knowledge base, with citations.</Text>
+            <View style={[styles.emptyChip, { backgroundColor: colors.pinkSoft }]}><Sparkles color={colors.pink} size={26} /></View>
+            <Text style={[styles.emptyTitle, { color: colors.ink }]}>Ask anything about your documents</Text>
+            <Text style={[styles.emptyBody, { color: colors.inkSoft }]}>Answers come only from your knowledge base, with citations.</Text>
           </View>
         ) : (
           <FlatList
@@ -75,16 +80,16 @@ export default function ChatScreen() {
           />
         )}
 
-        <View style={styles.composer}>
+        <View style={[styles.composer, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
           <TextInput
-            style={styles.input}
+            style={[styles.input, { backgroundColor: colors.surfaceAlt, borderColor: colors.border, color: colors.ink }]}
             value={text}
             onChangeText={setText}
             placeholder="Ask a question…"
             placeholderTextColor={colors.inkMuted}
             multiline
           />
-          <Pressable style={styles.send} onPress={send} disabled={loading || !text.trim()}>
+          <Pressable style={[styles.send, { backgroundColor: colors.indigo }]} onPress={send} disabled={loading || !text.trim()}>
             <Send color="#fff" size={18} />
           </Pressable>
         </View>
@@ -102,24 +107,22 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.canvas },
+  safe: { flex: 1 },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
-    backgroundColor: colors.surface,
+    paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1,
   },
   poolPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1,
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
-    paddingHorizontal: 12, paddingVertical: 7, backgroundColor: colors.indigoSoft,
+    borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 7,
   },
-  poolPillText: { fontFamily: fonts.bodySemi, fontSize: 13, color: colors.indigo, flexShrink: 1 },
+  poolPillText: { fontFamily: fonts.bodySemi, fontSize: 13, flexShrink: 1 },
   historyBtn: { padding: 4 },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 10 },
-  emptyChip: { width: 56, height: 56, borderRadius: 18, backgroundColor: colors.pinkSoft, alignItems: 'center', justifyContent: 'center' },
-  emptyTitle: { fontFamily: fonts.displaySemi, fontSize: 17, color: colors.ink, textAlign: 'center' },
-  emptyBody: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft, textAlign: 'center' },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 12, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface },
-  input: { flex: 1, maxHeight: 120, backgroundColor: colors.surfaceAlt, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 12, fontFamily: fonts.body, fontSize: 15, color: colors.ink },
-  send: { width: 48, height: 48, borderRadius: radius.md, backgroundColor: colors.indigo, alignItems: 'center', justifyContent: 'center' },
+  emptyChip: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontFamily: fonts.displaySemi, fontSize: 17, textAlign: 'center' },
+  emptyBody: { fontFamily: fonts.body, fontSize: 13, textAlign: 'center' },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 12, borderTopWidth: 1 },
+  input: { flex: 1, maxHeight: 120, borderRadius: radius.md, borderWidth: 1, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 12, fontFamily: fonts.body, fontSize: 15 },
+  send: { width: 48, height: 48, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
 })

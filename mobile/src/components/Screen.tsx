@@ -1,7 +1,7 @@
 import React from 'react'
 import { StyleSheet, ScrollView, View, ViewStyle, RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { colors } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
 
 interface Props {
   children: React.ReactNode
@@ -17,8 +17,9 @@ interface Props {
 }
 
 export default function Screen({ children, scroll = true, contentStyle, refreshing, onRefresh }: Props) {
+  const { colors } = useAppTheme()
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]} edges={['top']}>
       {scroll ? (
         <ScrollView
           contentContainerStyle={[styles.content, contentStyle]}
@@ -37,6 +38,6 @@ export default function Screen({ children, scroll = true, contentStyle, refreshi
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.canvas },
+  safe: { flex: 1 },
   content: { padding: 20, gap: 16 },
 })

@@ -1,4 +1,5 @@
 import type { PoolGraph } from '../api/documents'
+import { lightColors, type ColorTokens } from '../theme/tokens'
 
 /**
  * Build a fully self-contained HTML page rendering a force-directed graph of
@@ -18,8 +19,12 @@ import type { PoolGraph } from '../api/documents'
  *
  * Supports one-finger pan (on empty space) / node-drag (on a node), and
  * two-finger pinch-to-zoom, mirroring the web page's scroll-to-zoom + drag.
+ *
+ * ``theme`` supplies the active palette so the graph matches light/dark mode;
+ * these are our own token constants (never user data), so interpolating them
+ * into the stylesheet is safe -- unlike the graph data below.
  */
-export function graphHtml(graph: PoolGraph, repulsion: number, initialFocus = ''): string {
+export function graphHtml(graph: PoolGraph, repulsion: number, initialFocus = '', theme: ColorTokens = lightColors): string {
   // Node/edge labels come from LLM extraction over uploaded-document content
   // (backend/generation/pipeline.py::extract_graph_elements) with no
   // character filtering server-side -- an adversarial document (or a
@@ -45,16 +50,16 @@ export function graphHtml(graph: PoolGraph, repulsion: number, initialFocus = ''
      are cut off. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; background: #FFFFFF; overflow: hidden; }
+  html, body { margin: 0; padding: 0; height: 100%; background: ${theme.surface}; overflow: hidden; }
   svg { width: 100vw; height: 100vh; display: block; touch-action: none; }
-  .edge { stroke: #A8A5BD; stroke-opacity: 0.5; stroke-width: 1.5; }
-  .edge.hl { stroke: #EC4899; stroke-opacity: 0.9; }
-  .node { fill: #6366F1; stroke: #ffffff; stroke-width: 2; }
-  .node.focus { fill: #EC4899; }
-  .node.dim { fill: #A8A5BD; opacity: 0.3; }
-  /* White halo (paint-order: stroke) keeps overlapping labels legible. */
-  .label { font-family: -apple-system, Roboto, sans-serif; font-size: 10px; fill: #1E1B2E;
-           paint-order: stroke; stroke: #ffffff; stroke-width: 3px; stroke-linejoin: round;
+  .edge { stroke: ${theme.inkMuted}; stroke-opacity: 0.5; stroke-width: 1.5; }
+  .edge.hl { stroke: ${theme.pink}; stroke-opacity: 0.9; }
+  .node { fill: ${theme.indigo}; stroke: ${theme.surface}; stroke-width: 2; }
+  .node.focus { fill: ${theme.pink}; }
+  .node.dim { fill: ${theme.inkMuted}; opacity: 0.3; }
+  /* Surface-colored halo (paint-order: stroke) keeps overlapping labels legible. */
+  .label { font-family: -apple-system, Roboto, sans-serif; font-size: 10px; fill: ${theme.ink};
+           paint-order: stroke; stroke: ${theme.surface}; stroke-width: 3px; stroke-linejoin: round;
            pointer-events: none; }
   .label.hidden { display: none; }
 </style>

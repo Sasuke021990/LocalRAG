@@ -1,7 +1,8 @@
 import React from 'react'
 import { View, Text, StyleSheet, Pressable } from 'react-native'
 import { FileText, FolderInput } from 'lucide-react-native'
-import { colors, fonts, radius } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts, radius } from '../theme/tokens'
 import type { Doc } from '../api/documents'
 
 interface Props {
@@ -11,15 +12,16 @@ interface Props {
 }
 
 export default function DocumentRow({ doc, onMove }: Props) {
+  const { colors } = useAppTheme()
   return (
     <View style={styles.row}>
-      <View style={styles.chip}><FileText color={colors.indigo} size={18} /></View>
+      <View style={[styles.chip, { backgroundColor: colors.indigoSoft }]}><FileText color={colors.indigo} size={18} /></View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.name} numberOfLines={1}>{doc.file_name}</Text>
-        <Text style={styles.meta}>{doc.chunk_count} chunks · pool: {doc.pool}</Text>
-        {doc.summary ? <Text style={styles.summary} numberOfLines={2}>{doc.summary}</Text> : null}
+        <Text style={[styles.name, { color: colors.ink }]} numberOfLines={1}>{doc.file_name}</Text>
+        <Text style={[styles.meta, { color: colors.inkSoft }]}>{doc.chunk_count} chunks · pool: {doc.pool}</Text>
+        {doc.summary ? <Text style={[styles.summary, { color: colors.inkSoft }]} numberOfLines={2}>{doc.summary}</Text> : null}
       </View>
-      {doc.pool_assigned === false ? <Text style={styles.needs}>needs a pool</Text> : null}
+      {doc.pool_assigned === false ? <Text style={[styles.needs, { color: colors.amber }]}>needs a pool</Text> : null}
       {onMove ? (
         // A real 40x40 tap target (not just hitSlop) -- at 18px-icon-plus-hitSlop
         // this sat right next to the destructive delete button with only a
@@ -34,10 +36,10 @@ export default function DocumentRow({ doc, onMove }: Props) {
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
-  chip: { width: 36, height: 36, borderRadius: radius.sm, backgroundColor: colors.indigoSoft, alignItems: 'center', justifyContent: 'center' },
-  name: { fontFamily: fonts.bodyMedium, fontSize: 14, color: colors.ink },
-  meta: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
-  summary: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft, marginTop: 2 },
-  needs: { fontFamily: fonts.bodySemi, fontSize: 11, color: colors.amber },
+  chip: { width: 36, height: 36, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  name: { fontFamily: fonts.bodyMedium, fontSize: 14 },
+  meta: { fontFamily: fonts.body, fontSize: 12 },
+  summary: { fontFamily: fonts.body, fontSize: 12, marginTop: 2 },
+  needs: { fontFamily: fonts.bodySemi, fontSize: 11 },
   actionBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
 })

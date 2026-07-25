@@ -11,7 +11,8 @@ import { Sora_600SemiBold, Sora_700Bold } from '@expo-google-fonts/sora'
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from '@expo-google-fonts/inter'
 import { JetBrainsMono_600SemiBold } from '@expo-google-fonts/jetbrains-mono'
 
-import { colors } from './src/theme/tokens'
+import { lightColors } from './src/theme/tokens'
+import { ThemeProvider, useAppTheme } from './src/theme/ThemeContext'
 import RootNavigator from './src/navigation/RootNavigator'
 import ErrorBoundary from './src/components/ErrorBoundary'
 import OfflineBanner from './src/components/OfflineBanner'
@@ -36,16 +37,33 @@ setUnauthorizedHandler(() => {
   if (hadUser) Alert.alert('Session expired', 'Please sign in again.')
 })
 
-const navTheme = {
-  dark: false,
-  colors: {
-    primary: colors.indigo,
-    background: colors.canvas,
-    card: colors.surface,
-    text: colors.ink,
-    border: colors.border,
-    notification: colors.pink,
-  },
+// Reads the live theme (follows the OS setting, see ThemeContext.tsx) to
+// drive the navigation chrome and status bar -- must live below
+// ThemeProvider to call useAppTheme().
+function AppShell({ onReady }: { onReady: () => void }) {
+  const { colors, isDark } = useAppTheme()
+
+  const navTheme = {
+    dark: isDark,
+    colors: {
+      primary: colors.indigo,
+      background: colors.canvas,
+      card: colors.surface,
+      text: colors.ink,
+      border: colors.border,
+      notification: colors.pink,
+    },
+  }
+
+  return (
+    <>
+      <NavigationContainer theme={navTheme as any} onReady={onReady}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <RootNavigator />
+      </NavigationContainer>
+      <OfflineBanner />
+    </>
+  )
 }
 
 export default function App() {
@@ -62,19 +80,20 @@ export default function App() {
     if (fontsLoaded) await SplashScreen.hideAsync().catch(() => {})
   }, [fontsLoaded])
 
-  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: colors.canvas }} />
+  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: lightColors.canvas }} />
 
+  // SafeAreaProvider must sit above ErrorBoundary: the boundary's fallback UI
+  // renders a SafeAreaView, which throws without a provider above it -- so a
+  // caught error would otherwise crash the error screen itself.
   return (
-    <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <SafeAreaProvider>
-          <NavigationContainer theme={navTheme as any} onReady={onReady}>
-            <StatusBar style="dark" />
-            <RootNavigator />
-          </NavigationContainer>
-          <OfflineBanner />
-        </SafeAreaProvider>
-      </QueryClientProvider>
-    </ErrorBoundary>
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <ErrorBoundary>
+          <QueryClientProvider client={queryClient}>
+            <AppShell onReady={onReady} />
+          </QueryClientProvider>
+        </ErrorBoundary>
+      </SafeAreaProvider>
+    </ThemeProvider>
   )
 }
