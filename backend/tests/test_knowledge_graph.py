@@ -4,6 +4,7 @@ import pytest
 
 from knowledge_graph import store
 from generation import pipeline
+from utils.config import config
 
 
 class TestMergeAndGet:
@@ -143,13 +144,15 @@ class _FakeLLM:
         self.output = output
         self._ready = ready
         self.called = False
+        self.last_model = "unset"
 
     @property
     def ready(self):
         return self._ready
 
-    async def generate_stream(self, system, user, history=None):
+    async def generate_stream(self, system, user, history=None, model=None):
         self.called = True
+        self.last_model = model
         for tok in self.output:
             yield tok
 
@@ -171,6 +174,21 @@ class TestExtractGraphElements:
         llm = _FakeLLM("x", ready=False)
         assert await pipeline.extract_graph_elements(["content"], llm) == ([], [])
         assert llm.called is False
+
+    async def test_uses_configured_graph_model(self, monkeypatch):
+        """Graph extraction is structured JSON, not chat — it can run on a
+        much smaller model than LLM_MODEL (see config.LLM_GRAPH_MODEL)."""
+        monkeypatch.setattr(config, "LLM_GRAPH_MODEL", "qwen3-0.6b")
+        llm = _FakeLLM('{"nodes": [], "edges": []}')
+        await pipeline.extract_graph_elements(["content"], llm)
+        assert llm.last_model == "qwen3-0.6b"
+
+    async def test_blank_graph_model_falls_back_to_chat_model(self, monkeypatch):
+        # None tells the backend "no override" — it then uses config.LLM_MODEL.
+        monkeypatch.setattr(config, "LLM_GRAPH_MODEL", "")
+        llm = _FakeLLM('{"nodes": [], "edges": []}')
+        await pipeline.extract_graph_elements(["content"], llm)
+        assert llm.last_model is None
 
 
 @pytest.fixture

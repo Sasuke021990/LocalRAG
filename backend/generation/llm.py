@@ -46,7 +46,15 @@ class BaseLLM:
     def ready(self) -> bool:
         return False
 
-    async def generate_stream(self, system: str, user: str, history: Optional[List[dict]] = None) -> AsyncIterator[str]:
+    async def generate_stream(
+        self, system: str, user: str, history: Optional[List[dict]] = None, model: Optional[str] = None,
+    ) -> AsyncIterator[str]:
+        """
+        ``model`` optionally overrides the configured chat model for this one
+        call — used by background jobs that want a smaller/faster model than
+        the conversational one (see ``config.LLM_GRAPH_MODEL``). Backends that
+        serve a single in-process model ignore it.
+        """
         return
         yield  # pragma: no cover — makes this an async generator
 
@@ -92,7 +100,12 @@ class EmbeddedLLM(BaseLLM):
     def ready(self) -> bool:
         return self.enabled and self._loaded and self._llama is not None
 
-    async def generate_stream(self, system: str, user: str, history: Optional[List[dict]] = None) -> AsyncIterator[str]:
+    async def generate_stream(
+        self, system: str, user: str, history: Optional[List[dict]] = None, model: Optional[str] = None,
+    ) -> AsyncIterator[str]:
+        # `model` is accepted for interface parity but ignored: this backend
+        # has exactly one GGUF loaded in-process, so there's nothing to switch
+        # to. Per-task model overrides only apply to the `openai` backend.
         if not self.ready:
             return
         prompt = grounding.format_chat_prompt(system, user, history)
@@ -172,12 +185,14 @@ class OpenAICompatibleLLM(BaseLLM):
         if self._sem is not None:
             self._sem.release()
 
-    async def generate_stream(self, system: str, user: str, history: Optional[List[dict]] = None) -> AsyncIterator[str]:
+    async def generate_stream(
+        self, system: str, user: str, history: Optional[List[dict]] = None, model: Optional[str] = None,
+    ) -> AsyncIterator[str]:
         if not self.ready:
             return
 
         payload = {
-            "model": config.LLM_MODEL,
+            "model": model or config.LLM_MODEL,
             "messages": grounding.chat_messages(system, user, history),
             "temperature": config.LLM_TEMPERATURE,
             "max_tokens": config.LLM_MAX_TOKENS,

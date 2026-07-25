@@ -116,13 +116,19 @@ async def extract_graph_elements(chunks: List[str], llm) -> Tuple[List[str], Lis
     ``summarize_document``. Returns ``(node_labels, edge_triples)``; an empty
     result (LLM disabled/unavailable, empty doc, or unparseable output) is a
     valid "no graph data for this document" outcome, never an error.
+
+    Runs on ``config.LLM_GRAPH_MODEL`` when set — this is structured JSON
+    extraction rather than conversation, so it can use a much smaller/faster
+    model than chat. Blank falls back to the normal chat model.
     """
     if not chunks or not getattr(llm, "ready", False):
         return [], []
     system_prompt = grounding.build_graph_extraction_prompt(chunks)
     user_prompt = "Extract the knowledge graph as JSON." + grounding.thinking_directive(False)
     parts: List[str] = []
-    async for token in llm.generate_stream(system_prompt, user_prompt):
+    async for token in llm.generate_stream(
+        system_prompt, user_prompt, model=config.LLM_GRAPH_MODEL or None,
+    ):
         parts.append(token)
     return _parse_graph_json("".join(parts).strip())
 
