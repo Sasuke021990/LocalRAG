@@ -52,17 +52,22 @@ Backend, web, and mobile all shipped, then put through two rounds of real on-dev
 - [x] **Mobile HomeScreen**: stat cards now tappable → Knowledge tab (mirrors web).
 - [x] 458 backend tests total (35 for the graph store/extraction/gating + 3 for the pool-move race guard), full web Vite build clean, mobile `tsc` clean + full `expo export` bundle succeeds after every change.
 - [ ] **The final round of fixes (recenter button, collision spacing) has not yet been re-verified on-device** — was mid-session when they landed. Confirm on next device pass.
+- [x] **Small extraction-only model, built and tested but not yet committed (2026-07-25)**: new `config.LLM_GRAPH_MODEL` env var (blank by default, falls back to `LLM_MODEL`) — graph extraction is structured JSON output, not conversation, so it can run on something much smaller (e.g. `qwen3-0.6b`) than the full chat model. `generate_stream()` on both LLM backends now takes an optional `model` override (embedded backend ignores it — one GGUF loaded, nothing to switch to). Wired through `docker-compose.yml`, `docker-compose.truenas.yml`, `.env.example`. 460/460 tests passing (2 new). **Held per an explicit "don't implement until I say" pause — code exists locally, not committed/pushed.**
 
 **Pending redesign (decided 2026-07-25): move extraction to a nightly batch job**
 - [ ] **Change the processing model from "immediately after upload" to a scheduled nightly cron at 3am.** All documents uploaded that day get their graph extraction processed in one overnight batch; results appear for the user the next day. Motivation: the per-upload LLM extraction has been unreliable (see the LLM-stability item in §3) and batching moves that cost off the interactive path.
 - [ ] **Requirement: each document must reach a definitive terminal state** (100% success or an explicit recorded failure) — no silently-stuck documents. Needs per-document processing status tracked in Redis, retries with backoff inside the batch, and a way to see/re-run failures.
 - [ ] ⚠️ **Known caveat (flagged, accepted):** batching alone does **not** fix the underlying LLM instability — it relocates the failures to 3am rather than eliminating them. The retry/terminal-state requirement above is what actually addresses reliability, so it is not optional.
-- [ ] **Open question**: does the per-document AI summary (§1d) also move to this nightly batch, or stay immediate? Summaries are currently fast and reliable; graph extraction is the slow/flaky one. Not yet decided.
+- [x] **Decided 2026-07-25**: the per-document AI summary (§1d) **also moves to this nightly batch** — both extraction and summarization run together in the same overnight pass, sharing the same per-document terminal-state/retry machinery. §1d's original "immediate, upload-time" timing is superseded by this.
 - [ ] Scheduler infra note: this is the second feature needing a scheduler (Insights Feed §1c is the other). Build one shared scheduling mechanism rather than two, and mind the multi-worker leader-lock problem called out in §3.
 
 ### 1b. Podcast Mode
 - [ ] Summarizer prompt (new system prompt variant in `grounding.py`, reuses existing `generation/llm.py` pipeline)
-- [ ] TTS: **xtts-api-server** (OpenAI-compatible `/v1/audio/speech`-shaped), config mirrors `LLM_*` pattern (`TTS_ENABLED`, `TTS_API_BASE`, `TTS_API_KEY`, `TTS_VOICE`). *Note: an `audio-piper-1` container is now running locally alongside the stack — confirm whether Piper is replacing xtts as the intended TTS engine before building.*
+- [x] **TTS engine decided 2026-07-25: the "Audio Studio" API**, not `xtts-api-server` as originally spec'd. Custom REST API (not OpenAI-compatible), documented at `F:\Projects\Gravity\Audio\docs\API.md`, base `http://localhost:8888/api/v1`:
+  - `GET /engines` → lists `edge` (cloud, Microsoft Edge Read Aloud) and `piper` (local, offline neural TTS)
+  - `GET /voices?engine=piper` → voice IDs per engine
+  - `POST /synthesize` → `{input, engine, voice, speed}` → raw audio bytes (`audio/mpeg` for edge, `audio/wav` for piper); `X-Cache-Status` header (`HIT`/`MISS`, Redis-backed on their side)
+  - Config should mirror the `LLM_*` pattern regardless: `TTS_ENABLED`, `TTS_API_BASE=http://localhost:8888/api/v1`, `TTS_ENGINE` (edge/piper), `TTS_VOICE`.
 - [ ] **Storage model (REVISED 2026-07-25 — supersedes the earlier "streamed only, never persisted" note):** still **never written to a persistent file server-side** (nothing stored in the cloud or on the host), but the finished audio **is saved on the user's own device** so it survives navigating away and can be replayed. Generation **must not be cancelled** when the user leaves the Podcast screen — it completes in the background and the file lands on-device.
 - [ ] **Old-file cleanup**: starting a new podcast deletes the previously stored on-device audio (one podcast retained at a time, per user).
 - [ ] ⚠️ **Implementation conflict to resolve**: §2's client-disconnect fix deliberately *stops* LLM generation when the client goes away. Podcast needs the opposite (keep going). In practice, navigating between screens inside a live RN app does **not** drop an in-flight fetch, so foreground navigation is fine — but this must be verified, and the two behaviors kept deliberately distinct (chat: cancel on disconnect; podcast: run to completion).
@@ -85,6 +90,7 @@ Backend, web, and mobile all shipped, then put through two rounds of real on-dev
 - [x] 14 new tests (`test_grounding.py`, `test_ai_pipeline.py`, `test_pipeline.py`) + full suite (434 passed) + live end-to-end verification against a rebuilt Docker stack: uploaded a real refund-policy .txt, confirmed an accurate 3-sentence summary appeared in `GET /documents` ~20s after upload, no errors in logs.
 - [x] **Mobile: visually confirmed on a real device** during the Knowledge Graph testing pass (2026-07-25) — summaries render correctly under each document row in the Knowledge Base list.
 - [ ] **Web: still not visually verified in-browser** — the in-app browser tool was unavailable all session. Do a real visual pass next time it's back.
+- [ ] ⚠️ **Timing superseded 2026-07-25**: this was built as an immediate upload-time background pass (still accurately describes the current shipped code above). It is now moving to the nightly 3am batch alongside graph extraction — see §1a. Not yet re-implemented; this section still describes the live behavior until that lands.
 
 ### 1e. MCP/API token template section — **FIXED (web)**
 - [x] **Gap found and fixed**: the curl/MCP examples only existed inside the show-once token-reveal modal — closing it lost them entirely, unlike `WebhookManager.vue`'s always-available collapsible template section. Added a matching persistent "API / MCP setup template" section to `TokenManager.vue` using a `YOUR_TOKEN` placeholder, so the format is always there to reference even without a live token in hand.
@@ -104,7 +110,7 @@ Everything here is **newly requested and unbuilt**. Ordered roughly by dependenc
 - [ ] **New "Pools" tab** owning everything pool-related: create, rename, move documents between pools, delete, and general pool management.
 - [ ] **Knowledge Base tab becomes upload-only** — the pool picker / assign strip / move / create / delete UI added to `KnowledgeScreen.tsx` earlier this session moves out to the new tab. (That work isn't wasted — `PoolPickerSheet.tsx` and the `deletePool` API call get reused.)
 - [ ] **No silent default-General assignment**: after a successful upload, show a success popup that asks the user to file the document — into General, a new pool, or an existing one. General remains an *option*, just not an automatic destination. (The existing `pool_assigned=false` flag already models "not yet filed" and should back this.)
-- [ ] Web: decide whether web mirrors this restructure or keeps its current single-page Knowledge Base. **Not yet decided** — mobile-first, so mobile leads.
+- [x] **Decided 2026-07-25: mobile-only.** Web does **not** get a separate Pools tab — it keeps its current single-page Knowledge Base with inline pool management exactly as-is. This restructure applies to mobile only.
 
 **Chat**
 - [ ] **Fix: LLM failure silently degrades to a raw passage dump.** When the inference server errors/times out, `generate_stream` yields nothing and `stream_answer` falls back to `_fallback_answer()`, which dumps raw scored passages with no indication anything failed. Users read this as "chat is broken/weird." Show an explicit "AI is temporarily unavailable — please try again" state instead. **This is the root cause of the reported "chat not working properly."**
@@ -121,7 +127,7 @@ Everything here is **newly requested and unbuilt**. Ordered roughly by dependenc
 
 **Cross-cutting**
 - [ ] **UI/UX polish pass — analyse gaps and raise the whole app to a professional, enterprise-grade standard.** Deliberately broad; needs its own scoping pass once the structural changes above land (a polish pass before the Pools-tab restructure would be wasted work). Supersedes/absorbs the vague "motion pass" item in §5.
-- [ ] **MCP**: remove the API text from MCP *(user note — exact intent not yet confirmed; likely the `curlExample()` block in the token-reveal modal / template section. Clarify before acting.)*
+- [ ] **MCP**: remove the API text from MCP *(user note — exact intent not yet confirmed; likely the `curlExample()` block in the token-reveal modal / template section. **Explicitly deferred by the user 2026-07-25 ("will think of it at last")** — not blocking, revisit at the end of this build order.)*
 
 ### 1h. New "Team/Org" plan tier — restructuring — **DESCOPED (2026-07-24)**
 
@@ -209,17 +215,18 @@ Plus: email verification on signup (`plan.md` §D) — still not implemented.
 
 ~~1. Proactive Insights Feed Pro/Max~~ — confirmed intentional, env-configurable later.
 ~~2. Annual-discount badge scope~~ — confirmed, all three paid plans.
-~~3. Document-summary timing~~ — decided, upload-time background pass.
+~~3. Document-summary timing~~ — originally decided as an upload-time background pass (still true for how it was *built*); **superseded 2026-07-25, see #9 below** — summaries are moving to the nightly batch alongside graph extraction.
 ~~4. LLM-keeps-running bug~~ — confirmed (silent wasted compute) and fixed, see §2.
 ~~5. Podcast audio storage~~ — decided 2026-07-25: never server-side; stored **on the user's device**, generation completes in the background, previous file deleted when a new podcast starts. See §1b.
 ~~6. Pools tab scope~~ — decided 2026-07-25: a **new dedicated Pools tab replaces** the in-place pool UI; Knowledge Base becomes upload-only. See §1i.
 ~~7. Graph processing timing~~ — decided 2026-07-25: **nightly 3am batch cron** instead of per-upload. See §1a.
 ~~8. "No pretemplates in mobile"~~ — clarified: refers to chat suggestion chips ("summarise the pool", "pros and cons"). Web keeps them, mobile deliberately has none. See §1i.
 
+~~9. Document-summary batch timing~~ — decided 2026-07-25: summaries move to the same nightly 3am batch as graph extraction (not immediate anymore — see §1a and §1d).
+~~10. Web Pools-tab scope~~ — decided 2026-07-25: **web does NOT get a separate Pools tab.** The Pools-tab restructure (§1i) is mobile-only; web keeps its current single-page Knowledge Base with inline pool management as-is.
+~~11. TTS engine for Podcast Mode~~ — resolved 2026-07-25: use the **Audio Studio API** (`localhost:8888` — `/synthesize`, `/voices`, `/engines`, Edge + Piper engines), not `xtts-api-server`. See §1b.
+
 Still open:
 
 1. **Team/Org plan** — final name, and the rest of its feature row (storage/AI-quota/webhooks/priority-processing). Deliberately deferred — not blocking other work.
-2. **Does the per-document AI summary also move to the nightly batch**, or stay immediate? (Graph extraction is definitely moving; summaries are fast/reliable today.) See §1a.
-3. **"Remove API text from MCP"** — exact intent unconfirmed. Likely the `curlExample()` block in the token-reveal modal/template section, but needs confirming before acting. See §1i.
-4. **Does web mirror the Pools-tab restructure**, or keep its current single-page Knowledge Base? Mobile leads; web undecided. See §1i.
-5. **TTS engine for Podcast Mode** — task.md specs `xtts-api-server`, but an `audio-piper-1` container is now running locally. Confirm which is intended before building §1b.
+2. **"Remove API text from MCP"** — exact intent unconfirmed. **Explicitly deferred by the user ("will think of it at last")** — not blocking anything, revisit at the end. See §1i.
