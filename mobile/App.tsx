@@ -56,13 +56,13 @@ function AppShell({ onReady }: { onReady: () => void }) {
   }
 
   return (
-    <SafeAreaProvider>
+    <>
       <NavigationContainer theme={navTheme as any} onReady={onReady}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <RootNavigator />
       </NavigationContainer>
       <OfflineBanner />
-    </SafeAreaProvider>
+    </>
   )
 }
 
@@ -82,13 +82,18 @@ export default function App() {
 
   if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: lightColors.canvas }} />
 
+  // SafeAreaProvider must sit above ErrorBoundary: the boundary's fallback UI
+  // renders a SafeAreaView, which throws without a provider above it -- so a
+  // caught error would otherwise crash the error screen itself.
   return (
     <ThemeProvider>
-      <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <AppShell onReady={onReady} />
-        </QueryClientProvider>
-      </ErrorBoundary>
+      <SafeAreaProvider>
+        <ErrorBoundary>
+          <QueryClientProvider client={queryClient}>
+            <AppShell onReady={onReady} />
+          </QueryClientProvider>
+        </ErrorBoundary>
+      </SafeAreaProvider>
     </ThemeProvider>
   )
 }

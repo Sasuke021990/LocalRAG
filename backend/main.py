@@ -680,10 +680,24 @@ def _resolve_conversation(user_id: str, request: QueryRequest) -> Dict[str, Any]
     )
 
 
-def _history_from(conv: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Prior turns only (this conversation's messages *before* the current
-    one, which hasn't been appended yet) as the {role, content} shape the
-    generation pipeline expects."""
+def _history_from(conv: Dict[str, Any], request_pool: Optional[str]) -> List[Dict[str, str]]:
+    """
+    Prior turns only (this conversation's messages *before* the current one,
+    which hasn't been appended yet) as the {role, content} shape the
+    generation pipeline expects.
+
+    Returns no history at all if ``request_pool`` differs from the
+    conversation's last-used pool (``conv["pool"]``, updated on every
+    assistant turn — see ``_persist_turn``). A client can resubmit the same
+    ``conversation_id`` after switching pools via the pool picker without
+    starting a new chat (mobile's ``choosePool()`` doesn't reset the active
+    conversation) — retrieval/sources are always correctly scoped to the new
+    pool, but threading in prior turns that discuss a *different* pool's
+    documents biased the model's answer toward that old content even though
+    it cited the new pool's sources.
+    """
+    if (request_pool or "") != (conv.get("pool") or ""):
+        return []
     return [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
 
 
@@ -732,7 +746,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
 
         conv = _resolve_conversation(user_id, request)
-        history = _history_from(conv)
+        history = _history_from(conv, request.pool)
 
         start = asyncio.get_event_loop().time()
         result = await answer_pipeline.answer_query(
@@ -786,7 +800,7 @@ async def query_stream(http_request: Request, request: QueryRequest, user_id: st
     quota.record_ai_question(ingestion_pipeline.redis_client, user_id)
 
     conv = _resolve_conversation(user_id, request)
-    history = _history_from(conv)
+    history = _history_from(conv, request.pool)
 
     async def _events():
         final_data = None

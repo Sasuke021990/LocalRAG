@@ -32,7 +32,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   reset = () => this.setState({ error: null })
 
   render() {
-    if (this.state.error) return <ErrorFallback onReset={this.reset} />
+    if (this.state.error) return <ErrorFallback error={this.state.error} onReset={this.reset} />
     return this.props.children
   }
 }
@@ -40,7 +40,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
 // A class component can't call hooks itself, so the themed fallback UI lives
 // in its own function component -- ErrorBoundary must sit below ThemeProvider
 // in App.tsx for this to have a theme to read.
-function ErrorFallback({ onReset }: { onReset: () => void }) {
+function ErrorFallback({ error, onReset }: { error: Error; onReset: () => void }) {
   const { colors } = useAppTheme()
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]}>
@@ -50,6 +50,7 @@ function ErrorFallback({ onReset }: { onReset: () => void }) {
         <Text style={[styles.body, { color: colors.inkSoft }]}>
           An unexpected error occurred. You can try again — if it keeps happening, restarting the app usually helps.
         </Text>
+        {__DEV__ ? <Text style={[styles.debug, { color: colors.rose }]}>{error.message}</Text> : null}
         <Button title="Try again" onPress={onReset} style={{ alignSelf: 'stretch' }} />
       </View>
     </SafeAreaView>
@@ -62,4 +63,5 @@ const styles = StyleSheet.create({
   chip: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   title: { fontFamily: fonts.displaySemi, fontSize: 18 },
   body: { fontFamily: fonts.body, fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  debug: { fontFamily: fonts.mono, fontSize: 11, textAlign: 'center' },
 })
