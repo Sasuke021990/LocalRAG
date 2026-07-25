@@ -41,6 +41,11 @@ export interface PoolGraph { nodes: GraphNode[]; edges: GraphEdge[] }
 export const fetchPoolGraph = (pool: string) =>
   request<PoolGraph>(`/pools/${encodeURIComponent(pool)}/graph`)
 
+// One merged graph across every pool. Concepts aren't pool-specific, and the
+// per-pool view hid a document uploaded to another pool — mobile shows this
+// unified view instead, with no pool selector.
+export const fetchUserGraph = () => request<PoolGraph>('/graph')
+
 export interface PickedFile { uri: string; name: string; mimeType?: string }
 
 export interface UploadStartResult {

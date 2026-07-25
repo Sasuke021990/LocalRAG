@@ -180,6 +180,71 @@ def remove_document(redis_client, user_id: str, pool: str, file_name: str) -> No
     logger.info(f"Graph cleaned for removed '{file_name}' (user {user_id}, pool {pool})")
 
 
+def _pools_with_graph_data(redis_client, user_id: str) -> List[str]:
+    """
+    Every pool this user has graph data stored under, read back off the key
+    space. Derived by stripping the known prefix rather than splitting on
+    ":" — a pool name may itself contain a colon (``_sanitize_pool_name``
+    only strips path-traversal characters), which would break a naive split.
+    """
+    prefix = f"graph_nodes:{user_id}:"
+    return [key[len(prefix):] for key in redis_client.keys(f"{prefix}*")]
+
+
+def get_user_graph(redis_client, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    One merged graph across **all** of the user's pools, shaped exactly like
+    ``get_pool_graph``'s output so clients can use either interchangeably.
+
+    Pools are an organizational device for retrieval scoping; concepts aren't
+    pool-specific, and a per-pool graph made a document uploaded to pool A
+    invisible when viewing pool B — surprising, since users think of the
+    graph as "everything I know". Node ids are label slugs, so the same
+    concept appearing in two pools collapses into one node here (its
+    ``source_count`` is the union of backing documents, not a sum, so a
+    document filed in both pools isn't double-counted).
+    """
+    merged_nodes: Dict[str, Dict[str, Any]] = {}
+    merged_edges: Dict[str, Dict[str, Any]] = {}
+    pools = _pools_with_graph_data(redis_client, user_id)
+
+    for pool in pools:
+        for node_id in redis_client.smembers(_nodes_set_key(user_id, pool)):
+            node = _load_node(redis_client, user_id, pool, node_id)
+            if not node:
+                continue
+            existing = merged_nodes.get(node["id"])
+            if existing:
+                existing["sources"].update(node.get("sources", []))
+            else:
+                merged_nodes[node["id"]] = {
+                    "id": node["id"],
+                    "label": node.get("label", node["id"]),
+                    "sources": set(node.get("sources", [])),
+                }
+
+    for pool in pools:
+        for edge_id in redis_client.smembers(_edges_set_key(user_id, pool)):
+            edge = _load_edge(redis_client, user_id, pool, edge_id)
+            if not edge:
+                continue
+            # Same defensive dangling-edge skip as get_pool_graph.
+            if edge["source"] not in merged_nodes or edge["target"] not in merged_nodes:
+                continue
+            merged_edges.setdefault(edge["id"], {
+                "source": edge["source"],
+                "target": edge["target"],
+                "label": edge.get("label", ""),
+            })
+
+    nodes = [
+        {"id": n["id"], "label": n["label"], "source_count": len(n["sources"])}
+        for n in merged_nodes.values()
+    ]
+    nodes.sort(key=lambda n: n["label"].lower())
+    return {"nodes": nodes, "edges": list(merged_edges.values())}
+
+
 def get_pool_graph(redis_client, user_id: str, pool: str) -> Dict[str, List[Dict[str, Any]]]:
     """
     Return ``{"nodes": [...], "edges": [...]}`` for the pool, shaped for the

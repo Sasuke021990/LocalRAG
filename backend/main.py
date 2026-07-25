@@ -432,6 +432,25 @@ async def move_document(
 
 # ─── Knowledge graph ────────────────────────────────────────────────────────────
 
+@app.get("/graph", tags=["Pools"], summary="Concept graph across all pools")
+async def user_graph(user_id: str = Depends(require_current_user)):
+    """
+    One merged graph of every concept/relationship extracted from **all** of
+    this user's documents, regardless of which pool they live in.
+
+    Pools scope *retrieval*; concepts aren't pool-specific, and the per-pool
+    view (``/pools/{pool}/graph``, still available for the web client) made a
+    document uploaded to pool A invisible while viewing pool B. Same Pro+
+    gate and same response shape as the per-pool endpoint.
+    """
+    if not billing_plans.has_feature(billing_store.get_plan(auth_redis_client, user_id), "knowledge_graph"):
+        raise HTTPException(status_code=403, detail="The knowledge graph is available on Pro and above.")
+    try:
+        return graph_store.get_user_graph(ingestion_pipeline.redis_client, user_id)
+    except Exception as exc:
+        raise _internal_error(exc, "Failed to load knowledge graph")
+
+
 @app.get("/pools/{pool}/graph", tags=["Pools"], summary="Concept graph for a pool")
 async def pool_graph(pool: str, user_id: str = Depends(require_current_user)):
     """

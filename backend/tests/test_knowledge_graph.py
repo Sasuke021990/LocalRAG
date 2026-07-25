@@ -61,6 +61,59 @@ class TestMergeAndGet:
         assert graph == {"nodes": [], "edges": []}
 
 
+class TestUserGraphAcrossPools:
+    """
+    ``get_user_graph`` merges every pool into one view. Regression coverage
+    for the reported bug: a document uploaded to one pool produced graph data
+    that was invisible while any other pool was selected, because graph
+    storage is keyed per-pool.
+    """
+    UID = "kg-merge-user"
+
+    def test_includes_nodes_from_every_pool(self, redis_client):
+        store.merge_document(redis_client, self.UID, "PoolA", "a.txt", ["Alpha"], [])
+        store.merge_document(redis_client, self.UID, "PoolB", "b.txt", ["Beta"], [])
+        graph = store.get_user_graph(redis_client, self.UID)
+        assert {n["id"] for n in graph["nodes"]} == {"alpha", "beta"}
+
+    def test_includes_edges_from_every_pool(self, redis_client):
+        store.merge_document(redis_client, self.UID, "PoolA", "a.txt", [], [("Alpha", "Gamma", "links")])
+        store.merge_document(redis_client, self.UID, "PoolB", "b.txt", [], [("Beta", "Delta", "joins")])
+        graph = store.get_user_graph(redis_client, self.UID)
+        assert {e["label"] for e in graph["edges"]} == {"links", "joins"}
+
+    def test_same_concept_in_two_pools_collapses_to_one_node(self, redis_client):
+        store.merge_document(redis_client, self.UID, "PoolA", "a.txt", ["Shared Concept"], [])
+        store.merge_document(redis_client, self.UID, "PoolB", "b.txt", ["shared concept"], [])
+        graph = store.get_user_graph(redis_client, self.UID)
+        shared = [n for n in graph["nodes"] if n["id"] == "shared-concept"]
+        assert len(shared) == 1
+        assert shared[0]["source_count"] == 2
+
+    def test_same_document_in_two_pools_not_double_counted(self, redis_client):
+        # source_count is a union of backing documents, not a sum.
+        store.merge_document(redis_client, self.UID, "PoolA", "same.txt", ["Concept"], [])
+        store.merge_document(redis_client, self.UID, "PoolB", "same.txt", ["Concept"], [])
+        graph = store.get_user_graph(redis_client, self.UID)
+        assert [n["source_count"] for n in graph["nodes"] if n["id"] == "concept"] == [1]
+
+    def test_pool_name_containing_a_colon_is_handled(self, redis_client):
+        # _sanitize_pool_name only strips path-traversal characters, so ":"
+        # survives into the key -- the pool must still be discovered.
+        store.merge_document(redis_client, self.UID, "Odd:Name", "a.txt", ["Colonic"], [])
+        graph = store.get_user_graph(redis_client, self.UID)
+        assert "colonic" in {n["id"] for n in graph["nodes"]}
+
+    def test_user_with_no_graph_data_gets_empty_graph(self, redis_client):
+        assert store.get_user_graph(redis_client, "kg-nobody") == {"nodes": [], "edges": []}
+
+    def test_does_not_leak_another_users_graph(self, redis_client):
+        store.merge_document(redis_client, self.UID, "PoolA", "mine.txt", ["Mine"], [])
+        store.merge_document(redis_client, "kg-other-user", "PoolA", "theirs.txt", ["Theirs"], [])
+        graph = store.get_user_graph(redis_client, self.UID)
+        assert {n["id"] for n in graph["nodes"]} == {"mine"}
+
+
 class TestRemoveDocument:
     UID = "kg-del-user"
     POOL = "General"
