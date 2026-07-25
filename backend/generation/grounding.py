@@ -87,6 +87,65 @@ def greeting_response(query: str) -> str:
     )
 
 
+# Matches a request for an overview of a *whole* pool/knowledge base, not a
+# specific fact within it -- e.g. "summarize the pool" or "give me an
+# overview of my documents", but NOT "summarize the refund policy document"
+# (singular "document" is a specific-topic question chunk retrieval handles
+# fine). Requires the summarize/overview verb and a whole-scope noun within
+# 40 chars of each other (either order) so it doesn't fire on an unrelated
+# long sentence that happens to contain both words far apart.
+_POOL_SUMMARY_RE = re.compile(
+    r"\b(?:summar(?:y|ize|ise)|overview|recap)\b[^.?!]{0,40}\b(?:pool|documents|knowledge\s*base|everything)\b"
+    r"|\b(?:pool|documents|knowledge\s*base)\b[^.?!]{0,40}\b(?:summar(?:y|ize|ise)|overview|recap)\b",
+    re.IGNORECASE,
+)
+
+
+def is_pool_summary_request(query: str) -> bool:
+    """
+    True for a whole-pool overview request ("summarize the pool", "summarise
+    all my documents", "give me an overview of the knowledge base") as
+    opposed to a specific-topic question. Chunk-level retrieval (hybrid
+    search + rerank top-K) has no per-document diversity safeguard, so for a
+    vague whole-pool query one document's chunks can fill the entire top-K
+    window and squeeze another document out completely -- the model then
+    never sees so much as one sentence of it. This routes that intent to a
+    different context source (each document's own stored summary) instead.
+    """
+    return bool(_POOL_SUMMARY_RE.search(query or ""))
+
+
+def build_pool_summary_prompt(doc_summaries: List[Tuple[str, str]], thinking: bool = False) -> str:
+    """
+    System instruction for a whole-pool "summarize the documents" request.
+    Uses each document's already-generated one-shot summary (see
+    ``generation.pipeline.summarize_document``, produced during upload)
+    instead of retrieved chunks, so every document in scope is guaranteed to
+    be represented in the model's context regardless of how its chunks
+    would have scored against the vague query.
+    """
+    context = "\n\n".join(f"- **{name}**: {summary}" for name, summary in doc_summaries) or "(no summaries available)"
+    reasoning_line = (
+        "First reason step by step inside a <think></think> block, then give the final answer.\n"
+        if thinking else ""
+    )
+    return (
+        "You are Vaultly's assistant. The user wants an overview of everything in "
+        "this knowledge pool. Below is a short summary of each document in it "
+        "(not the full text) -- synthesize them into one coherent overview.\n\n"
+        "How to write the answer:\n"
+        "- Use clear, simple, everyday language. Prefer short sentences and plain "
+        "words over jargon.\n"
+        "- Format for easy reading with Markdown: short paragraphs or bullet "
+        "points, and **bold** for document names/key terms.\n"
+        "- Mention every document listed below at least briefly -- don't focus on "
+        "only one or two and ignore the rest.\n"
+        f"{reasoning_line}"
+        "\nDocument summaries:\n"
+        f"{context}"
+    )
+
+
 def passes_relevance_gate(reranked_results: List[Any], threshold: float) -> bool:
     """
     True only if there is at least one retrieved result whose score meets the

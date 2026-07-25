@@ -19,8 +19,10 @@ class _Result:
 
 
 class FakeSearch:
-    def __init__(self, results): self._results = results
-    def search(self, user_id, query, top_k, pool=None): return self._results
+    def __init__(self, results): self._results = results; self.called = False
+    def search(self, user_id, query, top_k, pool=None):
+        self.called = True
+        return self._results
 
 
 class FakeReranker:
@@ -46,6 +48,7 @@ class FakeLLM:
         self.output = output
         self._ready = ready
         self.called = False
+        self.last_system = None
         self.last_history = None
         self.last_user = None
         self.last_model = "unset"
@@ -53,6 +56,7 @@ class FakeLLM:
     def ready(self): return self._ready
     async def generate_stream(self, system, user, history=None, model=None):
         self.called = True
+        self.last_system = system
         self.last_history = history
         self.last_user = user
         self.last_model = model
@@ -295,6 +299,107 @@ class TestSummarizeDocument:
     async def test_strips_surrounding_whitespace(self):
         llm = FakeLLM("  \n  padded summary  \n  ")
         assert await pipeline.summarize_document(["chunk"], llm) == "padded summary"
+
+
+@pytest.mark.anyio
+class TestPoolSummary:
+    """
+    Regression coverage for the whole-pool "summarize the documents" bug: a
+    2-document pool where chunk-level retrieval squeezed one document out of
+    the top-K rerank window entirely, so the model never saw any of its
+    content. This path uses each document's stored summary instead.
+    """
+
+    def _docs(self, **over):
+        docs = [
+            {"file_name": "alpha.pdf", "pool": "General", "summary": "alpha covers widgets"},
+            {"file_name": "beta.pdf", "pool": "General", "summary": "beta covers gadgets"},
+        ]
+        docs[0].update(over.get("first", {}))
+        docs[1].update(over.get("second", {}))
+        return docs
+
+    async def test_bypasses_retrieval_entirely(self):
+        search = FakeSearch([_Result("irrelevant chunk", 0.9)])
+        events = await _drain(**_base(
+            query="summarize the pool", hybrid_search=search, llm=FakeLLM("an overview"),
+            list_documents_fn=lambda uid: self._docs(),
+        ))
+        assert search.called is False
+        assert events[-1][1]["refused"] is False
+
+    async def test_both_documents_represented_in_sources_and_prompt(self):
+        llm = FakeLLM("an overview of both")
+        events = await _drain(**_base(
+            query="summarize the pool", llm=llm,
+            list_documents_fn=lambda uid: self._docs(),
+        ))
+        sources = events[0][1]
+        assert {s["file_name"] for s in sources} == {"alpha.pdf", "beta.pdf"}
+        assert "alpha covers widgets" in llm.last_system
+        assert "beta covers gadgets" in llm.last_system
+
+    async def test_filters_to_the_selected_pool(self):
+        llm = FakeLLM("just general")
+        docs = self._docs(second={"pool": "Other"})
+        events = await _drain(**_base(
+            query="summarize the pool", pool="General", llm=llm,
+            list_documents_fn=lambda uid: docs,
+        ))
+        sources = events[0][1]
+        assert {s["file_name"] for s in sources} == {"alpha.pdf"}
+        assert "gadgets" not in llm.last_system
+
+    async def test_no_documents_in_pool_refuses(self):
+        events = await _drain(**_base(
+            query="summarize the pool", llm=FakeLLM("should not run"),
+            list_documents_fn=lambda uid: [],
+        ))
+        assert events[-1][1]["refused"] is True
+        assert events[-1][1]["answer"] == grounding.NO_RESULTS_MESSAGE
+
+    async def test_documents_without_summaries_yet_refuses_with_processing_message(self):
+        docs = [{"file_name": "alpha.pdf", "pool": "General", "summary": ""}]
+        events = await _drain(**_base(
+            query="summarize the pool", llm=FakeLLM("should not run"),
+            list_documents_fn=lambda uid: docs,
+        ))
+        assert events[-1][1]["refused"] is True
+        assert "processed" in events[-1][1]["answer"].lower()
+
+    async def test_llm_disabled_falls_back_to_raw_summaries(self):
+        llm = FakeLLM("", ready=False)
+        events = await _drain(**_base(
+            query="summarize the pool", llm=llm,
+            list_documents_fn=lambda uid: self._docs(),
+        ))
+        assert llm.called is False
+        answer = events[-1][1]["answer"]
+        assert "alpha covers widgets" in answer
+        assert "beta covers gadgets" in answer
+
+    async def test_not_triggered_without_list_documents_fn(self):
+        # No list_documents_fn wired in (e.g. an older caller) -- must fall
+        # through to normal retrieval rather than crash on a None call.
+        search = FakeSearch([_Result("X is a thing.", 0.9)])
+        events = await _drain(**_base(query="summarize the pool", hybrid_search=search, llm=FakeLLM("x")))
+        assert search.called is True
+
+    async def test_specific_topic_question_still_uses_normal_retrieval(self):
+        search = FakeSearch([_Result("X is a thing.", 0.9)])
+        events = await _drain(**_base(
+            query="what is the refund policy?", hybrid_search=search, llm=FakeLLM("x"),
+            list_documents_fn=lambda uid: self._docs(),
+        ))
+        assert search.called is True
+
+    async def test_not_cached(self):
+        cache = FakeCache()
+        await _drain(**_base(
+            query="summarize the pool", semantic_cache=cache, llm=FakeLLM("an overview"),
+            list_documents_fn=lambda uid: self._docs(),
+        ))
+        assert cache.saved == []
 
 
 @pytest.fixture

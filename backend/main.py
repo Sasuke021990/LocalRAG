@@ -755,6 +755,7 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
             hybrid_search=hybrid_search, reranker=reranker,
             semantic_cache=semantic_cache, llm=local_llm,
             pool=request.pool or None, history=history,
+            list_documents_fn=ingestion_pipeline.list_documents,
         )
         _persist_turn(user_id, conv["id"], request.query, result, request.pool)
 
@@ -810,6 +811,7 @@ async def query_stream(http_request: Request, request: QueryRequest, user_id: st
             hybrid_search=hybrid_search, reranker=reranker,
             semantic_cache=semantic_cache, llm=local_llm,
             pool=request.pool or None, history=history,
+            list_documents_fn=ingestion_pipeline.list_documents,
         )
         try:
             async for event, data in agen:
