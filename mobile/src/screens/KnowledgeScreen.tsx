@@ -15,7 +15,8 @@ import {
   IMAGE_MIME_TYPES, DOCUMENT_MIME_TYPES, type Doc,
 } from '../api/documents'
 import { useAuthStore } from '../stores/authStore'
-import { colors, fonts, radius } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts, radius } from '../theme/tokens'
 
 // What the pool-picker sheet is currently open for -- one shared sheet
 // instance handles upload destination, move, "needs a pool" assignment, and
@@ -25,6 +26,7 @@ type PickerTarget = 'upload' | 'newpool' | { doc: Doc } | null
 
 export default function KnowledgeScreen() {
   const qc = useQueryClient()
+  const { colors } = useAppTheme()
   const refreshUser = useAuthStore((s) => s.hydrate)
   const docsQ = useQuery({ queryKey: ['documents'], queryFn: fetchDocuments })
   const poolsQ = useQuery({ queryKey: ['pools'], queryFn: fetchPools })
@@ -124,25 +126,29 @@ export default function KnowledgeScreen() {
   return (
     <Screen refreshing={refreshing} onRefresh={onRefresh}>
       <View style={styles.headerRow}>
-        <Text style={styles.title}>Knowledge Base</Text>
-        <Pressable style={styles.newPoolBtn} onPress={() => setPicker('newpool')}>
+        <Text style={[styles.title, { color: colors.ink }]}>Knowledge Base</Text>
+        <Pressable style={[styles.newPoolBtn, { borderColor: colors.indigo }]} onPress={() => setPicker('newpool')}>
           <Plus color={colors.indigo} size={16} />
-          <Text style={styles.newPoolBtnText}>New pool</Text>
+          <Text style={[styles.newPoolBtnText, { color: colors.indigo }]}>New pool</Text>
         </Pressable>
       </View>
 
       <Card style={{ alignItems: 'center', gap: 10 }}>
-        <View style={styles.uploadChip}>
+        <View style={[styles.uploadChip, { backgroundColor: colors.indigoSoft }]}>
           {isImage && uploading
             ? <ImageIcon color={colors.indigo} size={26} />
             : <UploadCloud color={colors.indigo} size={26} />}
         </View>
-        <Text style={styles.uploadHint}>PDF, DOCX, TXT, CSV, MD, HTML, JSON, XML, PNG, JPG, WEBP, GIF, BMP, TIFF</Text>
+        <Text style={[styles.uploadHint, { color: colors.inkSoft }]}>PDF, DOCX, TXT, CSV, MD, HTML, JSON, XML, PNG, JPG, WEBP, GIF, BMP, TIFF</Text>
 
-        <Pressable style={styles.poolRow} onPress={() => setPicker('upload')} disabled={uploading}>
-          <Text style={styles.poolRowLabel}>Pool</Text>
+        <Pressable
+          style={[styles.poolRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+          onPress={() => setPicker('upload')}
+          disabled={uploading}
+        >
+          <Text style={[styles.poolRowLabel, { color: colors.inkSoft }]}>Pool</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Text style={styles.poolRowValue}>{uploadPool || 'General (default)'}</Text>
+            <Text style={[styles.poolRowValue, { color: colors.ink }]}>{uploadPool || 'General (default)'}</Text>
             <ChevronDown color={colors.inkMuted} size={14} />
           </View>
         </Pressable>
@@ -150,11 +156,11 @@ export default function KnowledgeScreen() {
         {uploading ? (
           <View style={{ alignSelf: 'stretch', gap: 6 }}>
             <View style={styles.progressRow}>
-              <Text style={styles.progressLabel} numberOfLines={1}>{progressMessage || 'Uploading…'}</Text>
-              <Text style={styles.progressPct}>{progressPct}%</Text>
+              <Text style={[styles.progressLabel, { color: colors.inkSoft }]} numberOfLines={1}>{progressMessage || 'Uploading…'}</Text>
+              <Text style={[styles.progressPct, { color: colors.inkSoft }]}>{progressPct}%</Text>
             </View>
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+            <View style={[styles.progressTrack, { backgroundColor: colors.surfaceAlt }]}>
+              <View style={[styles.progressFill, { backgroundColor: colors.indigo, width: `${progressPct}%` }]} />
             </View>
           </View>
         ) : (
@@ -163,18 +169,18 @@ export default function KnowledgeScreen() {
       </Card>
 
       {unassigned.length > 0 && (
-        <Card style={styles.unassignedCard}>
+        <Card style={[styles.unassignedCard, { borderColor: colors.amber, backgroundColor: colors.amberSoft }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
             <AlertCircle color={colors.amber} size={18} />
-            <Text style={styles.unassignedTitle}>
+            <Text style={[styles.unassignedTitle, { color: colors.ink }]}>
               {unassigned.length} document{unassigned.length > 1 ? 's need' : ' needs'} a pool
             </Text>
           </View>
           {unassigned.map((d) => (
             <View key={d.key} style={styles.unassignedRow}>
-              <Text style={styles.unassignedName} numberOfLines={1}>{d.file_name}</Text>
-              <Pressable style={styles.chooseBtn} onPress={() => setPicker({ doc: d })}>
-                <Text style={styles.chooseBtnText}>Choose a pool</Text>
+              <Text style={[styles.unassignedName, { color: colors.ink }]} numberOfLines={1}>{d.file_name}</Text>
+              <Pressable style={[styles.chooseBtn, { borderColor: colors.border }]} onPress={() => setPicker({ doc: d })}>
+                <Text style={[styles.chooseBtnText, { color: colors.ink }]}>Choose a pool</Text>
               </Pressable>
             </View>
           ))}
@@ -182,13 +188,13 @@ export default function KnowledgeScreen() {
       )}
 
       {docs.length === 0 ? (
-        <Card><Text style={styles.empty}>No documents yet. Upload your first above.</Text></Card>
+        <Card><Text style={[styles.empty, { color: colors.inkSoft }]}>No documents yet. Upload your first above.</Text></Card>
       ) : (
         groupedEntries.map(([pool, list]) => (
           <Card key={pool}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={styles.pool}>{pool}</Text>
+                <Text style={[styles.pool, { color: colors.ink }]}>{pool}</Text>
                 <Badge label={String(list.length)} color="indigo" />
               </View>
               {list.length === 0 && pool !== 'General' ? (
@@ -198,7 +204,7 @@ export default function KnowledgeScreen() {
               ) : null}
             </View>
             {list.length === 0 ? (
-              <Text style={styles.empty}>Empty pool.</Text>
+              <Text style={[styles.empty, { color: colors.inkSoft }]}>Empty pool.</Text>
             ) : (
               list.map((d) => (
                 <View key={d.key} style={styles.rowWrap}>
@@ -256,27 +262,27 @@ export default function KnowledgeScreen() {
 
 const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontFamily: fonts.display, fontSize: 24, color: colors.ink },
-  newPoolBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: colors.indigo, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 7 },
-  newPoolBtnText: { fontFamily: fonts.bodyMedium, fontSize: 13, color: colors.indigo },
-  uploadChip: { width: 52, height: 52, borderRadius: 16, backgroundColor: colors.indigoSoft, alignItems: 'center', justifyContent: 'center' },
-  uploadHint: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
-  poolRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: colors.surfaceAlt },
-  poolRowLabel: { fontFamily: fonts.bodyMedium, fontSize: 12, color: colors.inkSoft },
-  poolRowValue: { fontFamily: fonts.bodyMedium, fontSize: 13, color: colors.ink },
-  empty: { fontFamily: fonts.body, fontSize: 13, color: colors.inkSoft },
-  pool: { fontFamily: fonts.displaySemi, fontSize: 15, color: colors.ink },
+  title: { fontFamily: fonts.display, fontSize: 24 },
+  newPoolBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 7 },
+  newPoolBtnText: { fontFamily: fonts.bodyMedium, fontSize: 13 },
+  uploadChip: { width: 52, height: 52, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  uploadHint: { fontFamily: fonts.body, fontSize: 12 },
+  poolRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10 },
+  poolRowLabel: { fontFamily: fonts.bodyMedium, fontSize: 12 },
+  poolRowValue: { fontFamily: fonts.bodyMedium, fontSize: 13 },
+  empty: { fontFamily: fonts.body, fontSize: 13 },
+  pool: { fontFamily: fonts.displaySemi, fontSize: 15 },
   rowWrap: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   deleteBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   progressRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  progressLabel: { flex: 1, fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft },
-  progressPct: { fontFamily: fonts.mono, fontSize: 12, color: colors.inkSoft },
-  progressTrack: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceAlt, overflow: 'hidden' },
-  progressFill: { height: '100%', borderRadius: 3, backgroundColor: colors.indigo },
-  unassignedCard: { borderColor: 'rgba(245,158,11,0.4)', backgroundColor: 'rgba(245,158,11,0.05)' },
-  unassignedTitle: { fontFamily: fonts.bodySemi, fontSize: 14, color: colors.ink },
+  progressLabel: { flex: 1, fontFamily: fonts.body, fontSize: 12 },
+  progressPct: { fontFamily: fonts.mono, fontSize: 12 },
+  progressTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
+  progressFill: { height: '100%', borderRadius: 3 },
+  unassignedCard: { borderWidth: 1 },
+  unassignedTitle: { fontFamily: fonts.bodySemi, fontSize: 14 },
   unassignedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingVertical: 6 },
-  unassignedName: { flex: 1, fontFamily: fonts.body, fontSize: 13, color: colors.ink },
-  chooseBtn: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6 },
-  chooseBtnText: { fontFamily: fonts.bodyMedium, fontSize: 12, color: colors.ink },
+  unassignedName: { flex: 1, fontFamily: fonts.body, fontSize: 13 },
+  chooseBtn: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6 },
+  chooseBtnText: { fontFamily: fonts.bodyMedium, fontSize: 12 },
 })

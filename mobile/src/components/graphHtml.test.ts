@@ -1,4 +1,5 @@
 import { graphHtml } from './graphHtml'
+import { lightColors, darkColors } from '../theme/tokens'
 
 // Regression test for a stored-XSS finding: node/edge labels come from LLM
 // extraction over uploaded-document content with no character filtering
@@ -44,5 +45,31 @@ describe('graphHtml XSS escaping', () => {
   test('includes a restrictive CSP meta tag as defense-in-depth', () => {
     const html = buildHtml('Refund Policy')
     expect(html).toMatch(/Content-Security-Policy.*default-src 'none'/)
+  })
+})
+
+describe('graphHtml theming', () => {
+  const graph = { nodes: [{ id: 'a', label: 'Refund Policy', source_count: 1 }], edges: [] }
+
+  test('defaults to the light palette when no theme is passed', () => {
+    const html = graphHtml(graph, 9)
+    expect(html).toContain(`background: ${lightColors.surface}`)
+    expect(html).toContain(`fill: ${lightColors.ink}`)
+  })
+
+  test('renders dark surfaces and text when given the dark palette', () => {
+    const html = graphHtml(graph, 9, '', darkColors)
+    expect(html).toContain(`background: ${darkColors.surface}`)
+    expect(html).toContain(`fill: ${darkColors.ink}`)
+    expect(html).not.toContain(`background: ${lightColors.surface}`)
+  })
+
+  test('brand node/focus colours are identical across themes', () => {
+    const light = graphHtml(graph, 9, '', lightColors)
+    const dark = graphHtml(graph, 9, '', darkColors)
+    for (const html of [light, dark]) {
+      expect(html).toContain(`fill: ${lightColors.indigo}`)
+      expect(html).toContain(`stroke: ${lightColors.pink}`)
+    }
   })
 })

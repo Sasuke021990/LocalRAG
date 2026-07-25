@@ -1,7 +1,8 @@
 import React from 'react'
 import { Pressable, Text, StyleSheet, ActivityIndicator, View, ViewStyle } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
-import { colors, fonts, gradient, radius } from '../../theme/tokens'
+import { useAppTheme } from '../../theme/ThemeContext'
+import { fonts, gradient, radius, type ColorTokens } from '../../theme/tokens'
 
 interface Props {
   title: string
@@ -13,8 +14,9 @@ interface Props {
 }
 
 export default function Button({ title, onPress, variant = 'primary', disabled, loading, style }: Props) {
+  const { colors } = useAppTheme()
   const inner = (
-    <Text style={[styles.label, variant === 'primary' ? styles.labelOnGradient : { color: variantColor(variant) }]}>
+    <Text style={[styles.label, variant === 'primary' ? styles.labelOnGradient : { color: variantColor(colors, variant) }]}>
       {loading ? '…' : title}
     </Text>
   )
@@ -33,19 +35,19 @@ export default function Button({ title, onPress, variant = 'primary', disabled, 
     <Pressable
       onPress={onPress}
       disabled={disabled || loading}
-      style={[styles.base, outlineStyle(variant), { opacity: disabled ? 0.5 : 1 }, style]}
+      style={[styles.base, outlineStyle(colors, variant), { opacity: disabled ? 0.5 : 1 }, style]}
     >
-      {loading ? <ActivityIndicator color={variantColor(variant)} /> : inner}
+      {loading ? <ActivityIndicator color={variantColor(colors, variant)} /> : inner}
     </Pressable>
   )
 }
 
-function variantColor(v: string) {
+function variantColor(colors: ColorTokens, v: string) {
   if (v === 'danger') return colors.rose
   if (v === 'ghost') return colors.inkSoft
   return colors.indigo
 }
-function outlineStyle(v: string): ViewStyle {
+function outlineStyle(colors: ColorTokens, v: string): ViewStyle {
   if (v === 'ghost') return { backgroundColor: 'transparent' }
   return { backgroundColor: colors.surface, borderWidth: 1, borderColor: v === 'danger' ? colors.rose : colors.indigo }
 }

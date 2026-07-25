@@ -1,7 +1,8 @@
 import React from 'react'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { Home, MessageSquare, FolderOpen, Share2, Settings } from 'lucide-react-native'
-import { colors, fonts } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts } from '../theme/tokens'
 import HomeScreen from '../screens/HomeScreen'
 import ChatScreen from '../screens/ChatScreen'
 import KnowledgeScreen from '../screens/KnowledgeScreen'
@@ -11,6 +12,7 @@ import SettingsScreen from '../screens/SettingsScreen'
 const Tab = createBottomTabNavigator()
 
 export default function AppTabs() {
+  const { colors } = useAppTheme()
   return (
     <Tab.Navigator
       screenOptions={{

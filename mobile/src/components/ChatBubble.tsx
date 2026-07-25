@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-nati
 import Markdown from 'react-native-markdown-display'
 import { Sparkles, SearchX, TriangleAlert, ChevronDown, FileText, FolderOpen } from 'lucide-react-native'
 import Badge from './ui/Badge'
-import { colors, fonts, radius } from '../theme/tokens'
+import { useAppTheme } from '../theme/ThemeContext'
+import { fonts, radius, type ColorTokens } from '../theme/tokens'
 import type { Source } from '../api/query'
 
 export interface ChatMsg {
@@ -22,6 +23,7 @@ export interface ChatMsg {
 
 export default function ChatBubble({ msg }: { msg: ChatMsg }) {
   const [showThinking, setShowThinking] = useState(false)
+  const { colors } = useAppTheme()
 
   // Unique source document names — a compact row instead of a full passage
   // list; multiple chunks commonly come from the same document.
@@ -34,6 +36,8 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
     [msg.sources],
   )
 
+  const mdStyle = useMemo(() => markdownStyle(colors, msg.refused), [colors, msg.refused])
+
   // Transient status shown before the first answer token arrives.
   const statusText = (() => {
     if (!msg.streaming || msg.answer || msg.refused || msg.error) return ''
@@ -45,7 +49,9 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
     <View style={{ gap: 10, marginBottom: 16 }}>
       {/* Query */}
       <View style={styles.queryWrap}>
-        <View style={styles.queryBubble}><Text style={styles.queryText}>{msg.query}</Text></View>
+        <View style={[styles.queryBubble, { backgroundColor: colors.indigoSoft }]}>
+          <Text style={[styles.queryText, { color: colors.ink }]}>{msg.query}</Text>
+        </View>
       </View>
 
       {/* Answer */}
@@ -59,9 +65,13 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
           {msg.reasoning ? (
             <>
               <Pressable style={styles.toggle} onPress={() => setShowThinking((v) => !v)}>
-                <Text style={styles.toggleText}>{msg.streaming ? 'Thinking…' : 'Thinking'}</Text>
+                <Text style={[styles.toggleText, { color: colors.inkSoft }]}>{msg.streaming ? 'Thinking…' : 'Thinking'}</Text>
               </Pressable>
-              {showThinking ? <Text style={styles.thinking}>{msg.reasoning}</Text> : null}
+              {showThinking ? (
+                <Text style={[styles.thinking, { color: colors.inkSoft, backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+                  {msg.reasoning}
+                </Text>
+              ) : null}
             </>
           ) : null}
 
@@ -76,25 +86,26 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
 
           <View style={[
             styles.answerBubble,
+            { backgroundColor: colors.surface, borderColor: colors.border },
             msg.refused && { backgroundColor: colors.amberSoft, borderColor: colors.amber },
             msg.error ? { backgroundColor: colors.roseSoft, borderColor: colors.rose } : null,
           ]}>
             {msg.error ? (
-              <Text style={styles.errorText}>{msg.error}</Text>
+              <Text style={[styles.errorText, { color: colors.rose }]}>{msg.error}</Text>
             ) : statusText ? (
               <View style={styles.statusRow}>
                 <ActivityIndicator size="small" color={colors.inkSoft} />
-                <Text style={styles.statusText}>{statusText}</Text>
+                <Text style={[styles.statusText, { color: colors.inkSoft }]}>{statusText}</Text>
               </View>
             ) : (
               <>
-                <Markdown style={markdownStyle(msg.refused)}>{msg.answer || ''}</Markdown>
-                {msg.streaming ? <Text style={styles.cursor}> ▍</Text> : null}
+                <Markdown style={mdStyle}>{msg.answer || ''}</Markdown>
+                {msg.streaming ? <Text style={[styles.cursor, { color: colors.pink }]}> ▍</Text> : null}
               </>
             )}
 
             {!msg.refused && !msg.error && sourceDocs.length > 0 ? (
-              <View style={styles.sourcesRow}>
+              <View style={[styles.sourcesRow, { borderTopColor: colors.border }]}>
                 <FileText color={colors.inkMuted} size={13} />
                 {sourceDocs.map((doc) => (
                   <Badge key={doc} label={doc} color="slate" />
@@ -108,7 +119,7 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
   )
 }
 
-function markdownStyle(refused?: boolean) {
+function markdownStyle(colors: ColorTokens, refused?: boolean) {
   const textColor = refused ? colors.inkSoft : colors.ink
   return StyleSheet.create({
     body: { fontFamily: fonts.body, fontSize: 14, color: textColor, lineHeight: 21 },
@@ -122,15 +133,15 @@ function markdownStyle(refused?: boolean) {
     ordered_list: { marginBottom: 8 },
     list_item: { flexDirection: 'row', marginBottom: 2 },
     code_inline: {
-      fontFamily: fonts.mono, fontSize: 13, backgroundColor: colors.surfaceAlt,
+      fontFamily: fonts.mono, fontSize: 13, color: colors.ink, backgroundColor: colors.surfaceAlt,
       borderWidth: 1, borderColor: colors.border, borderRadius: 4, paddingHorizontal: 4,
     },
     code_block: {
-      fontFamily: fonts.mono, fontSize: 12, backgroundColor: colors.surfaceAlt,
+      fontFamily: fonts.mono, fontSize: 12, color: colors.ink, backgroundColor: colors.surfaceAlt,
       borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 10,
     },
     fence: {
-      fontFamily: fonts.mono, fontSize: 12, backgroundColor: colors.surfaceAlt,
+      fontFamily: fonts.mono, fontSize: 12, color: colors.ink, backgroundColor: colors.surfaceAlt,
       borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 10,
     },
     blockquote: {
@@ -143,17 +154,17 @@ function markdownStyle(refused?: boolean) {
 
 const styles = StyleSheet.create({
   queryWrap: { alignItems: 'flex-end' },
-  queryBubble: { backgroundColor: colors.indigoSoft, borderRadius: radius.lg, borderTopRightRadius: 4, paddingHorizontal: 14, paddingVertical: 9, maxWidth: '85%' },
-  queryText: { fontFamily: fonts.body, fontSize: 14, color: colors.ink },
+  queryBubble: { borderRadius: radius.lg, borderTopRightRadius: 4, paddingHorizontal: 14, paddingVertical: 9, maxWidth: '85%' },
+  queryText: { fontFamily: fonts.body, fontSize: 14 },
   avatar: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  answerBubble: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, borderTopLeftRadius: 4, padding: 12 },
+  answerBubble: { borderWidth: 1, borderRadius: radius.lg, borderTopLeftRadius: 4, padding: 12 },
   toggle: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  toggleText: { fontFamily: fonts.bodySemi, fontSize: 12, color: colors.inkSoft },
-  thinking: { fontFamily: fonts.body, fontSize: 12, color: colors.inkSoft, backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 10, marginTop: 6, marginBottom: 6 },
+  toggleText: { fontFamily: fonts.bodySemi, fontSize: 12 },
+  thinking: { fontFamily: fonts.body, fontSize: 12, borderWidth: 1, borderRadius: radius.sm, padding: 10, marginTop: 6, marginBottom: 6 },
   poolRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  statusText: { fontFamily: fonts.body, fontSize: 13, fontStyle: 'italic', color: colors.inkSoft },
-  errorText: { fontFamily: fonts.body, fontSize: 14, color: colors.rose, lineHeight: 20 },
-  cursor: { color: colors.pink, fontSize: 16 },
-  sourcesRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  statusText: { fontFamily: fonts.body, fontSize: 13, fontStyle: 'italic' },
+  errorText: { fontFamily: fonts.body, fontSize: 14, lineHeight: 20 },
+  cursor: { fontSize: 16 },
+  sourcesRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1 },
 })
