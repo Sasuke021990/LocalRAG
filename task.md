@@ -10,6 +10,84 @@
 
 ---
 
+## Mobile launch-readiness audit (2026-07-25) — analysis only, nothing implemented
+
+Full read-through of all 41 mobile source files (~3,400 lines) plus a systematic pass over every one of the 34 API call sites, cross-checked against the backend and web. Goal stated by the user: a bug-free, attractive, addictive, user-friendly mobile app. Verdict: feature coverage is genuinely good (~85% of web) and where error-handling is done well (Admin screen) it's excellent — but there's a **systemic weakness**: errors are silently swallowed across most of the app, which is directly why chat "felt broken." Not close to store-submittable yet; the gaps are well-defined and fixable.
+
+### 🔴 P0 — Launch blockers
+
+- [ ] **1. Chat errors render an empty bubble.** `chatStore.ts:145-148`'s `streamQuery` `onError` sets `streaming:false` but never records an error message; `ChatBubble.tsx:79` has nothing to show. Quota-exceeded, server-down, and timeout all render as an identical blank grey box. **This is the root cause of "chat not working properly."**
+- [ ] **2. Changing password silently kills the mobile session.** Backend's `change_password` bumps `token_version` and issues a new session via **cookie**; mobile authenticates with a **Bearer token** and never receives a replacement, so its stored token is instantly invalidated. `SettingsScreen.tsx:27` shows "Password updated ✓" and then every subsequent screen breaks until the user force-quits and logs back in.
+- [ ] **3. No global 401 handling.** `client.ts:28-34` throws on any non-OK response but nothing intercepts a 401 specifically — an expired/revoked session leaves the user stuck in a broken app with no auto-logout or re-login prompt anywhere.
+- [ ] **4. No account deletion on mobile.** Backend (`DELETE /auth/me`) and web both have it; `SettingsScreen.tsx` never calls it. **Automatic App Store rejection risk** (Apple 5.1.1(v) requires in-app account deletion for any app that allows signup).
+- [ ] **5. Google Sign-In is broken — decided: hide the button for v1.** Mobile sends `?redirect_uri=vaultly://…` (`LoginScreen.tsx:41`) but the backend's `google_login()` takes no such parameter and ignores it (`auth/routes.py:188`) — the browser lands on the *web* app and the user never returns to the native app. **Fix: remove/hide the "Continue with Google" button on mobile for v1** rather than fix the backend right now.
+- [ ] **6. No app icon, no splash image, no `assets/` directory, no `eas.json`.** `app.json` declares `splash`/`adaptiveIcon` but references zero actual image files, and no `assets/` directory exists at all in `mobile/`. **Cannot build or submit to either store in this state.**
+
+### 🟠 P1 — Broken or misleading
+
+- [ ] **7. Logout never calls the backend.** `authStore.logout()` only clears the local SecureStore token — it never hits an equivalent of the web's logout, so the L3 JWT-blacklist fix (session revocation on logout) is bypassed entirely on mobile; a "logged out" token stays valid until natural expiry.
+- [ ] **8. Streaming never actually streams on-device.** React Native's `fetch` doesn't expose a readable `body.getReader()`, so `streamQuery` (`api/query.ts:60-61`) **always** silently falls into `fallback()` — it waits for the *entire* answer to arrive, then fake-types it back at ~30ms/word. A 500-word answer adds roughly 15 seconds of artificial delay after the real answer already arrived.
+- [ ] **9. `res.ok` is never checked in the streaming fallback path.** `query.ts:59` — a 429 (quota) or 403 response falls through into `fallback()`, which throws, which is caught by the same silent `onError` from #1 → empty bubble, no indication it was a quota/permission issue specifically.
+- [ ] **10. No pull-to-refresh anywhere except Admin.** `Screen.tsx` (the shared screen wrapper) has no `RefreshControl` — Home, Knowledge, Graph, and Billing can't be refreshed with the universal mobile gesture.
+- [ ] **11. Document summaries and graph data never auto-appear after upload.** They land 20-30s post-upload via the background pass (§1a/§1d); nothing re-fetches automatically. A user watches the progress bar finish, sees no summary, and reasonably assumes it failed.
+- [ ] **12. No error boundary anywhere in the app.** One render-time error in any screen = permanent white screen, no recovery path.
+- [ ] **13. No offline/network-loss handling.** Airplane mode produces the exact same silent nothing as every other kind of failure (feeds into the P0/P1 silent-failure pattern below).
+- [ ] **14. No dark mode.** `app.json` hardcodes `"userInterfaceStyle": "light"`; every design token in `theme/tokens.ts` is light-only. Widely expected by users in 2026; also directly hurts the "attractive" goal.
+- [ ] **15. Move/delete touch targets are too small and sit adjacent.** The `FolderInput`/`Trash2` icons added to `DocumentRow`/pool rows are ~18px with no larger hit area, and the destructive delete action sits right next to the harmless move action — easy to mis-tap.
+
+### 🟡 P2 — Polish / "addictive" gaps
+
+- [ ] **16. Zero animation anywhere** — `react-native-reanimated` is an installed dependency but genuinely unused (verified: no `Animated`/`withTiming`/`useSharedValue` in the codebase). No transitions, no skeleton loaders, no micro-interactions.
+- [ ] **17. No haptic feedback** on send/upload/delete/any action.
+- [ ] **18. No accessibility labels anywhere** — zero `accessibilityLabel` usage in the entire codebase; unusable with a screen reader.
+- [ ] **19. Logout has no confirmation** — a single stray tap logs the user out immediately.
+- [ ] **20. No visible "New chat" entry point on the Chat screen itself** — it's buried inside the separate Conversations sub-screen.
+- [ ] **21. Daily AI-question quota is invisible everywhere except the Billing screen** — not shown on Home or in Chat, so users hit the limit with no warning.
+- [ ] **22. No copy / retry / regenerate / stop-generation controls on chat answers** — table-stakes for a modern chat UI, present on neither platform's mobile client today.
+- [ ] **23. Minor auth-form gaps**: no password-visibility toggle, no email keyboard type on login/signup, no return-key field chaining.
+
+### Request-handling audit — every API call site checked
+
+Traced all 34 call sites across `stores/`, `screens/`, and `components/` for try/catch coverage and user-visible feedback.
+
+| Handling quality | Count | Examples |
+|---|---|---|
+| ✅ Properly handled (try/catch + user-visible success/error) | 21 | All auth flows, all conversation ops, pool create/move/delete, checkout, contact form, **all 8 Admin mutations** (`AdminScreen.tsx` — genuinely excellent, includes optimistic-update rollback on failure at line 56; this is the pattern to copy everywhere else) |
+| ⚠️ Partial (catches the error but shows nothing useful) | 4 | Upload progress stream, the (now-hidden) Google flow, `listConversations`, password-change session handling |
+| ❌ Silent failure (no catch / empty catch / no error UI at all) | 9 | See below |
+
+**The 9 silent failures, specifically:**
+- [ ] `streamQuery.onError` (`chatStore.ts:145`) discards the error entirely — feeds P0 #1
+- [ ] `deleteDocument` in `KnowledgeScreen.tsx:72` has **no try/catch at all** — a bare `await` inside `onPress`; failure is an unhandled rejection and the document silently stays
+- [ ] `authStore.refresh()` (`authStore.ts:43`) has no try/catch, and its caller `KnowledgeScreen.refresh()` (`KnowledgeScreen.tsx:38-41`) doesn't wrap it either
+- [ ] `listConversations` (`chatStore.ts:74`) uses a deliberately empty `catch {}` — a failed fetch looks identical to "no conversations yet"
+- [ ] `fetchPlans` and `fetchSubscription` in `BillingScreen.tsx:58-59` both use `.catch(() => {})` — a failure renders the Billing screen with no plans and no explanation
+- [ ] `uploadWithProgress`'s `onError` handler in `KnowledgeScreen.tsx:58` is literally `() => {}` — the progress bar freezes mid-upload forever with no feedback
+- [ ] **All 9 `useQuery` call sites** (Home ×2, Knowledge ×2, Chat ×1, Graph ×3, Billing) — verified zero screens ever render `isError`/`.error`. A failed fetch is indistinguishable from a genuinely-empty result — **"you have no documents" when the real problem is the server being unreachable.** Aggravating case: in `KnowledgeGraphScreen.tsx:40`, if the subscription fetch itself fails, `allowed` **defaults to `true`**, so a Free user can briefly slip past the paywall while a Pro user with a network blip sees "no graph" instead of an actual error.
+- [ ] `useFonts`'s error is discarded in `App.tsx:34` (only `[fontsLoaded]` is destructured) — if font loading ever fails, the app renders an empty `<View/>` forever with no timeout and no recovery.
+
+**Root cause, app-wide:** there is no shared failure path. Three structural pieces are missing:
+- [ ] No global 401 interceptor (→ P0 #3)
+- [ ] No `QueryClient` global `onError`/`retry` config — `App.tsx:19` is a bare `new QueryClient()`
+- [ ] No error boundary (→ P1 #12)
+
+### Infrastructure gaps for already-planned features
+
+- [ ] **Podcast Mode (§1b)** needs `expo-av` (playback) and `expo-file-system` (on-device storage) — neither is installed.
+- [ ] **Proactive Insights Feed (§1c)** needs `expo-notifications` — not installed, no push infra exists on mobile at all yet.
+- [ ] **Camera-capture upload (§1i)** needs `expo-camera` or `expo-image-picker` — neither is installed.
+- [ ] **Store submission** additionally needs: privacy-policy/terms links somewhere in the app, iOS permission usage strings (camera, photo library once the above land), and real `ios.buildNumber`/`android.versionCode` values in `app.json`.
+
+### Recommended order (not started — awaiting go-ahead)
+
+1. **Phase 1 — stop the bleeding (P0 items 1-6):** chat error surfacing → global 401 handling → fix or work around the password-change session break → add account deletion → hide the Google button (decided) → add app icon/splash/`assets/`/`eas.json`.
+2. **Phase 2 — trust (P1 items 7-15):** logout hits the backend → fix `res.ok` handling → pull-to-refresh everywhere → auto-refresh after upload → error boundary → offline handling.
+3. **Phase 3 — delight (P2 items 16-23):** animations → dark mode → haptics → chat message actions → bigger touch targets → quota visibility → accessibility labels.
+
+Phase 1 alone should convert "feels broken" into "feels solid" — items 1 and 3 in particular explain most of the confusion hit during this session's live testing.
+
+---
+
 ## 0. What's already shipped (context, not action items)
 
 Condensed so this doc is self-orienting without re-reading the whole history:
