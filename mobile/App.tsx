@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { useFonts } from 'expo-font'
 import { Sora_600SemiBold, Sora_700Bold } from '@expo-google-fonts/sora'
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from '@expo-google-fonts/inter'
@@ -17,11 +17,10 @@ import RootNavigator from './src/navigation/RootNavigator'
 import ErrorBoundary from './src/components/ErrorBoundary'
 import OfflineBanner from './src/components/OfflineBanner'
 import { setUnauthorizedHandler } from './src/api/client'
+import { queryClient } from './src/api/queryClient'
 import { useAuthStore } from './src/stores/authStore'
 
 SplashScreen.preventAutoHideAsync().catch(() => {})
-
-const queryClient = new QueryClient()
 
 // Global 401 handling: an expired/revoked session token used to leave the
 // user stuck on a broken screen indefinitely, with no auto-logout or
