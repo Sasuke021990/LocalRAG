@@ -84,7 +84,7 @@ Traced all 34 call sites across `stores/`, `screens/`, and `components/` for try
 
 ### Infrastructure gaps for already-planned features
 
-- [ ] **Podcast Mode (§1b)** needs `expo-av` (playback) and `expo-file-system` (on-device storage) — neither is installed.
+- [ ] **Podcast Mode (§1b, DESCOPED TO V2)** needs `expo-av` (playback) and `expo-file-system` (on-device storage) — neither is installed. Not currently blocking; noted for when this is picked back up.
 - [ ] **Proactive Insights Feed (§1c)** needs `expo-notifications` — not installed, no push infra exists on mobile at all yet.
 - [ ] **Camera-capture upload (§1i)** needs `expo-camera` or `expo-image-picker` — neither is installed.
 - [ ] **Store submission** additionally needs: privacy-policy/terms links somewhere in the app, iOS permission usage strings (camera, photo library once the above land), and real `ios.buildNumber`/`android.versionCode` values in `app.json`.
@@ -148,7 +148,10 @@ Backend, web, and mobile all shipped, then put through two rounds of real on-dev
 - [x] **Decided 2026-07-25**: the per-document AI summary (§1d) **also moves to this nightly batch** — both extraction and summarization run together in the same overnight pass, sharing the same per-document terminal-state/retry machinery. §1d's original "immediate, upload-time" timing is superseded by this.
 - [ ] Scheduler infra note: this is the second feature needing a scheduler (Insights Feed §1c is the other). Build one shared scheduling mechanism rather than two, and mind the multi-worker leader-lock problem called out in §3.
 
-### 1b. Podcast Mode
+### 1b. Podcast Mode — **DESCOPED TO V2 (2026-07-26)**
+
+> Deliberately dropped from the mobile-launch push. Everything below is fully specced from prior planning discussion and kept as-is for whenever this gets picked back up — nothing here is stale, it's just not being built now.
+
 - [ ] Summarizer prompt (new system prompt variant in `grounding.py`, reuses existing `generation/llm.py` pipeline)
 - [x] **TTS engine decided 2026-07-25: the "Audio Studio" API**, not `xtts-api-server` as originally spec'd. Custom REST API (not OpenAI-compatible), documented at `F:\Projects\Gravity\Audio\docs\API.md`, base `http://localhost:8888/api/v1`:
   - `GET /engines` → lists `edge` (cloud, Microsoft Edge Read Aloud) and `piper` (local, offline neural TTS)
@@ -181,7 +184,7 @@ Backend, web, and mobile all shipped, then put through two rounds of real on-dev
 
 ### 1e. MCP/API token template section — **FIXED (web)**
 - [x] **Gap found and fixed**: the curl/MCP examples only existed inside the show-once token-reveal modal — closing it lost them entirely, unlike `WebhookManager.vue`'s always-available collapsible template section. Added a matching persistent "API / MCP setup template" section to `TokenManager.vue` using a `YOUR_TOKEN` placeholder, so the format is always there to reference even without a live token in hand.
-- [ ] **Mobile: not built at all.** There is no Integrations screen on mobile (`mobile/src/screens/`) — no token management, no webhook management. **Sequencing decided 2026-07-24: deferred to the end of the build order**, after the 3 headline mobile-launch features (Knowledge Graph §1a, Podcast Mode §1b, Insights Feed §1c) and Document summaries (§1d).
+- [ ] **Mobile: not built at all.** There is no Integrations screen on mobile (`mobile/src/screens/`) — no token management, no webhook management. **Sequencing decided 2026-07-24: deferred to the end of the build order**, after the mobile-launch features (Knowledge Graph §1a, Insights Feed §1c) and Document summaries (§1d). *Podcast Mode (§1b), originally the third headline feature in this ordering, is now descoped to V2 — no longer a gate.*
 
 ### 1f. Unlimited MCP/API tokens as an explicit plan detail — **FIXED**
 - [x] Confirmed no token-count cap anywhere in the backend. `featureList()` in both `BillingPage.vue` and mobile's `BillingScreen.tsx` now renders "Unlimited API/MCP tokens" (was the vaguer "API token access") whenever a plan's `api_tokens` flag is set — true for every tier today. `billing/plans.py`'s docstring updated to state it explicitly too.
@@ -312,6 +315,7 @@ Plus: email verification on signup (`plan.md` §D) — still not implemented.
 ~~9. Document-summary batch timing~~ — decided 2026-07-25: summaries move to the same nightly 3am batch as graph extraction (not immediate anymore — see §1a and §1d).
 ~~10. Web Pools-tab scope~~ — decided 2026-07-25: **web does NOT get a separate Pools tab.** The Pools-tab restructure (§1i) is mobile-only; web keeps its current single-page Knowledge Base with inline pool management as-is.
 ~~11. TTS engine for Podcast Mode~~ — resolved 2026-07-25: use the **Audio Studio API** (`localhost:8888` — `/synthesize`, `/voices`, `/engines`, Edge + Piper engines), not `xtts-api-server`. See §1b.
+~~12. Podcast Mode scope~~ — decided 2026-07-26: **descoped to V2**, dropped from the mobile-launch push. Fully specced, nothing built; picks back up post-launch. See §1b.
 
 Still open:
 
