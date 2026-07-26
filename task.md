@@ -85,7 +85,7 @@ Traced all 34 call sites across `stores/`, `screens/`, and `components/` for try
 ### Infrastructure gaps for already-planned features
 
 - [ ] **Podcast Mode (§1b, DESCOPED TO V2)** needs `expo-av` (playback) and `expo-file-system` (on-device storage) — neither is installed. Not currently blocking; noted for when this is picked back up.
-- [ ] **Proactive Insights Feed (§1c)** needs `expo-notifications` — not installed, no push infra exists on mobile at all yet.
+- [x] **Push notifications — infrastructure BUILT (2026-07-26).** `expo-notifications` + `expo-device` installed; full client + backend token lifecycle shipped. **Blocked on a development build to actually test** — see the dedicated section below.
 - [ ] **Camera-capture upload (§1i)** needs `expo-camera` or `expo-image-picker` — neither is installed.
 - [ ] **Store submission** additionally needs: privacy-policy/terms links somewhere in the app, iOS permission usage strings (camera, photo library once the above land), and real `ios.buildNumber`/`android.versionCode` values in `app.json`.
 
@@ -163,6 +163,32 @@ Backend, web, and mobile all shipped, then put through two rounds of real on-dev
 - [ ] ⚠️ **Implementation conflict to resolve**: §2's client-disconnect fix deliberately *stops* LLM generation when the client goes away. Podcast needs the opposite (keep going). In practice, navigating between screens inside a live RN app does **not** drop an in-flight fetch, so foreground navigation is fine — but this must be verified, and the two behaviors kept deliberately distinct (chat: cancel on disconnect; podcast: run to completion).
 - [ ] **Cut for v1**: no lock-screen/background playback (foreground-only), no custom speed/skip controls (basic play/pause/seek only), no "Add to Canvas" (undefined concept, scope out until "Canvas" gets its own design pass)
 - [ ] **Plan gating**: Free 1/day · Pro 3/day · Max 5/day — needs a `PODCAST_DAILY_LIMIT` config set per plan (same pattern as `FREE_AI_QUESTIONS_PER_DAY` etc.)
+
+### 1j. Push notifications — **INFRASTRUCTURE BUILT (2026-07-26), UNTESTED pending a dev build**
+
+Shared plumbing for every notification the product will send. Built ahead of its two consumers (upload-complete, shipped below; Insights Feed §1c, still unbuilt).
+
+> ⚠️ **Hard blocker on testing: push does not work in Expo Go, at all.** Expo's docs are explicit — *"You must use a development build to use push notifications since the capability is not built into Expo Go."* Every device test this session has been via Expo Go, so verifying this needs a workflow change.
+
+**Remaining setup — needs account-level access, can't be done from the codebase:**
+- [ ] **`eas init`** — the project has **no EAS `projectId`** (`app.json`'s `extra.eas.projectId` is unset, no `owner`). `getExpoPushTokenAsync()` cannot mint a token without one; the client already bails out cleanly and logs when it's missing.
+- [ ] **Android FCM V1 credentials** — Firebase project + service-account key uploaded to EAS.
+- [ ] **`eas build --profile development --platform android`**, then install that APK *instead of* Expo Go. The `development` profile already exists in `eas.json`.
+- [ ] **iOS APNs** — needs a paid Apple Developer account. Not blocking; testing is Android-only right now.
+- [ ] **End-to-end device verification** once the above lands. Everything below is unit-tested but has never delivered a real notification.
+
+**Built and tested (unit level):**
+- [x] **Backend `notifications/store.py`** — per-user token SET plus a `push_token_owner:<token>` reverse index. The reverse index exists for the **shared-device case**: registering a token that belongs to another account *reassigns* it, so a phone handed over (or an account switch) never keeps delivering the previous user's notifications. A stale logout arriving after reassignment correctly declines to unhook the new owner's token. Expo token format validated on the way in.
+- [x] **Backend `notifications/push.py`** — Expo `exp.host` delivery, batched at Expo's 100-message cap. Never raises (a failed notification must not break the upload that triggered it). Prunes tokens Expo reports `DeviceNotRegistered`; a mismatched ticket count is skipped rather than zipped against the wrong tokens (which would prune live devices).
+- [x] **Backend `notifications/routes.py`** — `POST`/`DELETE /notifications/device`, guarded by `require_session_user` (**not** `require_current_user`) so an MCP/API token can't attach a device and start receiving that account's notifications — same privilege-containment rule as `integrations/routes.py`.
+- [x] **Mobile `utils/push.ts`** — permission → token → register, with explicit Expo Go / simulator / missing-projectId guards so the Expo Go dev loop keeps working untouched. Never throws: a push failure must not break login.
+- [x] **Mobile lifecycle** (`authStore.ts`) — registers on login/signup/Google and on every launch of a restored session (Expo rotates tokens; the backend treats re-registration as idempotent). Registration is deliberately **not awaited** — blocking the post-login transition on a permission dialog + network call is bad UX. Unregisters on logout *before* clearing the session token, while it's still valid to authenticate the call.
+- [x] **Android notification icon** generated (`assets/notification-icon.png`) — white silhouette on transparent, because Android treats it as an alpha mask and tints it; a full-color icon renders as a white blob.
+- [x] **First consumer wired: upload-complete** — a large document takes long enough that users leave the app, at which point the in-app progress bar is gone. Metadata only in the payload (never document content), same privacy rule as webhooks.
+- [x] 47 new tests (30 backend, 17 mobile) covering token reassignment, stale-logout safety, dead-token pruning, batch capping, network-failure tolerance, and every availability guard. Backend 550 passing, mobile 73 passing, `tsc` clean, `expo export` bundles.
+
+**Found and fixed in passing — account deletion was leaking data:**
+- [x] `admin/store.py::delete_user_completely` (the shared hard-delete used by *both* admin deletion and self-service account deletion) **never removed knowledge-graph keys** — `graph_nodes`/`graph_node`/`graph_edges`/`graph_edge` were absent from its pattern list entirely. Those node labels are LLM-extracted **from the user's own document content**, so a deleted account left derived content behind: a data-retention problem, not just orphaned keys. Now cleaned, along with the new push-token keys. 2 regression tests, both verified to fail against the pre-fix code.
 
 ### 1c. Proactive Insights Feed
 - [ ] **Simplified scope (locked)**: no external data fetching at all — only surfaces insights from the user's own existing pool content. Removes the entire "connectors + external evaluation agent" complexity from the original blueprint.

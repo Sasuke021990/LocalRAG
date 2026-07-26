@@ -168,6 +168,12 @@ def delete_user_completely(redis_client, user_id: str, data_dir: str = "/app/dat
         if token_hash:
             redis_client.delete(f"mcp_token_lookup:{token_hash}")
 
+    # Push-token owner index — keyed by the token itself, so like the MCP
+    # lookup keys above it can't be reached by a user_id pattern and has to
+    # be resolved from the user's own token set before that set is deleted.
+    for push_token in redis_client.smembers(f"push_tokens:{user_id}"):
+        redis_client.delete(f"push_token_owner:{push_token}")
+
     # Everything keyed under the user, by pattern.
     patterns = [
         f"document:{user_id}:*",
@@ -179,6 +185,15 @@ def delete_user_completely(redis_client, user_id: str, data_dir: str = "/app/dat
         f"webhooks:{user_id}",
         f"conversation:{user_id}:*",
         f"conversation_index:{user_id}",
+        f"push_tokens:{user_id}",
+        # Knowledge-graph data (task.md §1a). These were missing entirely,
+        # so a deleted account left its extracted concepts behind — and
+        # those labels are LLM-derived *from the user's document content*,
+        # making it a data-retention problem, not just orphaned keys.
+        f"graph_nodes:{user_id}:*",
+        f"graph_node:{user_id}:*",
+        f"graph_edges:{user_id}:*",
+        f"graph_edge:{user_id}:*",
     ]
     for pattern in patterns:
         keys = redis_client.keys(pattern)
