@@ -5,6 +5,7 @@ import { useNavigation } from '@react-navigation/native'
 import { useQuery } from '@tanstack/react-query'
 import { Send, Sparkles, History, FolderOpen, ChevronDown } from 'lucide-react-native'
 import ChatBubble from '../components/ChatBubble'
+import AiQuotaBar from '../components/AiQuotaBar'
 import PoolPickerModal from '../components/PoolPickerModal'
 import { useChatStore } from '../stores/chatStore'
 import { fetchPools } from '../api/documents'
@@ -63,6 +64,13 @@ export default function ChatScreen() {
           </Pressable>
         </View>
 
+        {/* Daily AI allowance, counted down live as answers complete
+            (chatStore invalidates ['subscription']). Shown here so hitting
+            the limit isn't a surprise mid-conversation — task.md P2 #21. */}
+        <View style={[styles.quotaStrip, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
+          <AiQuotaBar compact />
+        </View>
+
         {history.length === 0 ? (
           <View style={styles.emptyWrap}>
             <View style={[styles.emptyChip, { backgroundColor: colors.pinkSoft }]}><Sparkles color={colors.pink} size={26} /></View>
@@ -118,6 +126,7 @@ const styles = StyleSheet.create({
   },
   poolPillText: { fontFamily: fonts.bodySemi, fontSize: 13, flexShrink: 1 },
   historyBtn: { padding: 4 },
+  quotaStrip: { paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 10 },
   emptyChip: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontFamily: fonts.displaySemi, fontSize: 17, textAlign: 'center' },

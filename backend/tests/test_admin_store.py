@@ -125,6 +125,45 @@ class TestCascadeDelete:
     def test_delete_missing_user_returns_false(self, redis_client):
         assert admin_store.delete_user_completely(redis_client, "nope", data_dir="/tmp") is False
 
+    def test_delete_removes_knowledge_graph_data(self, redis_client, tmp_path):
+        """
+        Regression test: the graph key patterns (task.md §1a) were missing
+        from delete_user_completely entirely, so a deleted account left its
+        extracted concepts behind in Redis. Those node labels are LLM-derived
+        from the user's own document content, making this a data-retention
+        problem rather than merely orphaned keys.
+        """
+        from knowledge_graph import store as graph_store
+
+        uid = _make_user(redis_client, "graphowner@example.com")
+        graph_store.merge_document(
+            redis_client, uid, "General", "doc.txt",
+            nodes=["Refund Policy"], edges=[("Refund Policy", "Digital Goods", "excludes")],
+        )
+        # Sanity: the data really is there before deletion, so a pass below
+        # can't come from it never having been written.
+        assert redis_client.keys(f"graph_node:{uid}:*")
+
+        assert admin_store.delete_user_completely(redis_client, uid, data_dir=str(tmp_path)) is True
+
+        for pattern in ("graph_nodes", "graph_node", "graph_edges", "graph_edge"):
+            assert redis_client.keys(f"{pattern}:{uid}:*") == [], f"{pattern} keys survived deletion"
+
+    def test_delete_removes_push_tokens_and_owner_index(self, redis_client, tmp_path):
+        from notifications import store as push_store
+
+        uid = _make_user(redis_client, "pushowner@example.com")
+        token = "ExponentPushToken[zzzzzzzzzzzzzzzzzzzzzz]"
+        push_store.register_token(redis_client, uid, token)
+        assert push_store.get_tokens(redis_client, uid) == [token]
+
+        assert admin_store.delete_user_completely(redis_client, uid, data_dir=str(tmp_path)) is True
+
+        assert push_store.get_tokens(redis_client, uid) == []
+        # The token->user index is keyed by the token, not the user, so it
+        # needs its own cleanup or it survives as a dangling pointer.
+        assert redis_client.get(f"push_token_owner:{token}") is None
+
 
 class TestNoContentLeak:
     def test_no_admin_function_returns_document_content(self, redis_client):

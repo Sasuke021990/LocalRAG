@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import * as chatApi from '../api/chat'
 import { streamQuery, type Source } from '../api/query'
+import { queryClient } from '../api/queryClient'
 
 export interface ChatMsg {
   query: string
@@ -146,6 +147,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (d.conversation_id) set({ activeConversationId: d.conversation_id })
         set({ loading: false })
         get().loadConversations()
+        // This answer just consumed one of the day's AI questions — refresh
+        // the cached subscription so the quota indicators (Home, Chat header)
+        // count down live instead of only after a screen remount.
+        queryClient.invalidateQueries({ queryKey: ['subscription'] })
       },
       onError: (e) => {
         // Surface the real failure instead of leaving an empty bubble — the
@@ -154,6 +159,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // messages); a raw network failure falls back to a generic message.
         patch({ streaming: false, error: e?.message || 'Something went wrong. Please try again.' })
         set({ loading: false })
+        // The backend counts a question at dispatch, before generation — so a
+        // failed answer still spent quota. Refresh here too, or the indicator
+        // would over-report what's left.
+        queryClient.invalidateQueries({ queryKey: ['subscription'] })
       },
     })
   },

@@ -41,6 +41,14 @@ OUT_OF_SCOPE_MESSAGE = (
 # the passages don't contain the answer.
 REFUSAL_MESSAGE = OUT_OF_SCOPE_MESSAGE
 
+# Shown when generation itself fails (inference server unreachable, timed
+# out, or crashed mid-stream) — distinct from OUT_OF_SCOPE_MESSAGE (retrieval
+# worked, the model just has nothing relevant to say). Previously this case
+# silently fell through to a raw ranked-passage dump with no indication
+# anything had gone wrong, which read to users as "chat is broken" (task.md's
+# mobile-launch audit, §1i — the identified root cause of that complaint).
+GENERATION_FAILED_MESSAGE = "AI is temporarily unavailable — please try again in a moment."
+
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 # Matches only when the *entire* message is a greeting / thanks / small-talk /

@@ -42,6 +42,8 @@ from chat import store as chat_store
 from integrations import routes as integrations_routes
 from integrations import webhooks
 from knowledge_graph import store as graph_store
+from notifications import push as push_notifications
+from notifications import routes as notification_routes
 from generation import pipeline as answer_pipeline
 from generation.llm import llm as local_llm
 from ingestion.pipeline import DocumentIngestionPipeline
@@ -135,6 +137,7 @@ app.include_router(integrations_routes.router, prefix="/integrations", tags=["In
 app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 app.include_router(billing_routes.router, prefix="/billing", tags=["Billing"])
 app.include_router(chat_routes.router, prefix="/chat", tags=["Chat"])
+app.include_router(notification_routes.router, prefix="/notifications", tags=["Notifications"])
 
 
 # ─── Component initialisation ─────────────────────────────────────────────────
@@ -604,6 +607,20 @@ async def upload_document(
                          "pool_assigned": pool_explicitly_selected, "chunk_count": result["total_chunks"]},
                     )
 
+                    # Push notification: ingesting a large document takes long
+                    # enough that users leave the app, and the in-app progress
+                    # bar is gone once they do. Metadata only in `data` (never
+                    # document content), same privacy rule as webhooks; it's
+                    # just enough for the app to deep-link to the right pool.
+                    # send_to_user never raises and no-ops when the user has no
+                    # registered devices.
+                    push_notifications.send_to_user(
+                        auth_redis_client, user_id,
+                        title="Document ready",
+                        body=f"\"{safe_filename}\" is processed and ready to search.",
+                        data={"type": "document.ingested", "file_name": safe_filename, "pool": safe_pool},
+                    )
+
                     # Best-effort AI summary, after the upload is already
                     # marked complete — a slow/unavailable LLM must never
                     # retroactively fail an otherwise-successful upload
@@ -788,6 +805,11 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         )
     except HTTPException:
         raise  # e.g. the 429 quota error, or a bad conversation_id — must not become a 500
+    except answer_pipeline.GenerationFailedError as exc:
+        # A genuine LLM backend outage — 503 with the friendly message
+        # rather than the generic _internal_error() correlation-ID response;
+        # this is a known, expected failure mode, not an unhandled bug.
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise _internal_error(exc, "Query error")
 
@@ -844,6 +866,10 @@ async def query_stream(http_request: Request, request: QueryRequest, user_id: st
                 # parses uniformly and newlines never break SSE framing.
                 yield {"event": event, "data": json.dumps(data)}
         except Exception as exc:
+            # Covers a GenerationFailedError from the pipeline (LLM backend
+            # down/timed out) the same as any other failure here — its
+            # str() is already the friendly GENERATION_FAILED_MESSAGE, so no
+            # special-casing needed to surface it correctly to the client.
             logger.error(f"Query stream error: {exc}")
             yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
             return

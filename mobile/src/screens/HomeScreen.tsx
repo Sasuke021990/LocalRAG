@@ -6,6 +6,7 @@ import { FileText, Boxes } from 'lucide-react-native'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
 import UsageRing from '../components/UsageRing'
+import AiQuotaBar from '../components/AiQuotaBar'
 import DocumentRow from '../components/DocumentRow'
 import { fetchDocuments, fetchPools } from '../api/documents'
 import { useAuthStore } from '../stores/authStore'
@@ -45,6 +46,8 @@ export default function HomeScreen() {
       <Text style={[styles.name, { color: colors.ink }]}>{email.split('@')[0]}</Text>
 
       <Card style={{ alignItems: 'center' }}><UsageRing /></Card>
+
+      <AiQuotaBar />
 
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <Pressable style={styles.stat} onPress={goToKnowledge}>

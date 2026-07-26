@@ -94,7 +94,14 @@ class TestOpenAIStreaming:
         out = [t async for t in backend.generate_stream("s", "u")]
         assert out == []
 
-    async def test_server_error_degrades_to_empty(self, monkeypatch):
+    async def test_server_error_before_any_token_raises(self, monkeypatch):
+        """
+        Regression: this used to silently yield nothing, which the pipeline
+        read as "model produced an empty response" and fell back to a raw
+        ranked-passage dump — no indication a real outage had happened
+        (task.md's mobile-launch audit, §1i). It must now raise so the
+        pipeline can surface an explicit "AI unavailable" error instead.
+        """
         monkeypatch.setattr(config, "LLM_ENABLED", True)
 
         def boom(*a, **k):
@@ -102,8 +109,44 @@ class TestOpenAIStreaming:
 
         monkeypatch.setattr(llm_module.requests, "post", boom)
         backend = llm_module.OpenAICompatibleLLM()
-        out = [t async for t in backend.generate_stream("s", "u")]
-        assert out == []  # never raises — pipeline falls back to passages
+        with pytest.raises(ConnectionError):
+            [t async for t in backend.generate_stream("s", "u")]
+
+    async def test_server_error_mid_stream_raises_after_partial_tokens(self, monkeypatch):
+        def boom_after_two():
+            yield "partial"
+            yield " answer"
+            raise TimeoutError("read timed out")
+
+        fake_resp = _FakeStreamResponse(boom_after_two())
+        monkeypatch.setattr(config, "LLM_ENABLED", True)
+        monkeypatch.setattr(llm_module.requests, "post", lambda *a, **k: fake_resp)
+        backend = llm_module.OpenAICompatibleLLM()
+
+        received = []
+        with pytest.raises(TimeoutError):
+            async for tok in backend.generate_stream("s", "u"):
+                received.append(tok)
+        # Tokens already produced before the failure aren't lost.
+        assert "".join(received) == "partial answer"
+        assert fake_resp.closed is True  # cleanup still ran
+
+    async def test_disconnect_during_a_failing_stream_does_not_raise(self, monkeypatch):
+        # A cancellation (client gone) must never be reported as a
+        # generation failure, even if the background thread was mid-error
+        # when it happened.
+        monkeypatch.setattr(config, "LLM_ENABLED", True)
+
+        def infinite_tokens():
+            while True:
+                yield "x"
+
+        fake_resp = _FakeStreamResponse(infinite_tokens())
+        monkeypatch.setattr(llm_module.requests, "post", lambda *a, **k: fake_resp)
+        backend = llm_module.OpenAICompatibleLLM()
+        agen = backend.generate_stream("s", "u")
+        await asyncio.wait_for(agen.__anext__(), timeout=5)
+        await asyncio.wait_for(agen.aclose(), timeout=5)  # must not raise
 
     async def test_bearer_key_sent_when_configured(self, monkeypatch):
         monkeypatch.setattr(config, "LLM_ENABLED", True)
@@ -180,6 +223,28 @@ class TestEmbeddedStreaming:
         )
         out = [t async for t in backend.generate_stream("sys", "user")]
         assert "".join(out) == "Hello world"
+
+    async def test_generation_error_before_any_token_raises(self, monkeypatch):
+        def boom():
+            raise RuntimeError("llama.cpp crashed")
+            yield  # pragma: no cover — makes this a generator; never reached
+
+        backend = self._fake_backend(monkeypatch, boom)
+        with pytest.raises(RuntimeError):
+            [t async for t in backend.generate_stream("sys", "user")]
+
+    async def test_generation_error_mid_stream_raises_after_partial_tokens(self, monkeypatch):
+        def boom_after_two():
+            yield {"choices": [{"text": "partial"}]}
+            yield {"choices": [{"text": " answer"}]}
+            raise RuntimeError("llama.cpp crashed")
+
+        backend = self._fake_backend(monkeypatch, boom_after_two)
+        received = []
+        with pytest.raises(RuntimeError):
+            async for tok in backend.generate_stream("sys", "user"):
+                received.append(tok)
+        assert "".join(received) == "partial answer"
 
     async def test_client_disconnect_stops_pulling_more_chunks(self, monkeypatch):
         """

@@ -26,7 +26,17 @@
         "backgroundColor": "#6366F1"
       }
     },
-    "plugins": ["expo-secure-store", "expo-font"],
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#6366F1"
+        }
+      ]
+    ],
     "extra": {
       "apiBaseUrl": "https://api.vaultly.app"
     }
