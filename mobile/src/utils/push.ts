@@ -2,6 +2,7 @@ import { Platform } from 'react-native'
 import Constants, { ExecutionEnvironment } from 'expo-constants'
 import * as Device from 'expo-device'
 import * as Notifications from 'expo-notifications'
+import * as SecureStore from 'expo-secure-store'
 import * as notificationsApi from '../api/notifications'
 
 /**
@@ -26,6 +27,35 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 })
+
+// The user's own on/off choice, persisted on-device. Distinct from the OS
+// permission: someone can grant the system prompt and still switch
+// notifications off in Settings, and that choice has to survive relaunches —
+// otherwise the auto-registration on every app launch would silently
+// re-enable what they just turned off.
+//
+// Stored in SecureStore purely because it's already a dependency (used for
+// the session token); a boolean preference isn't a secret, this just avoids
+// pulling in AsyncStorage for one key.
+const PREF_KEY = 'push_enabled'
+
+/** Whether the user wants push. Defaults to true (opt-out, not opt-in). */
+export async function isPushEnabled(): Promise<boolean> {
+  try {
+    const raw = await SecureStore.getItemAsync(PREF_KEY)
+    return raw === null ? true : raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+async function setPreference(enabled: boolean): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(PREF_KEY, String(enabled))
+  } catch {
+    /* preference is best-effort; the register/unregister below is what counts */
+  }
+}
 
 /** True when push genuinely can't work here, so callers can skip silently. */
 export function pushUnavailableReason(): string | null {
@@ -57,6 +87,11 @@ function projectId(): string | undefined {
  * must not block sign-in.
  */
 export async function registerForPush(): Promise<string | null> {
+  if (!(await isPushEnabled())) {
+    if (__DEV__) console.log('[push] skipped — user has notifications turned off')
+    return null
+  }
+
   const unavailable = pushUnavailableReason()
   if (unavailable) {
     if (__DEV__) console.log(`[push] skipped — ${unavailable}`)
@@ -115,4 +150,69 @@ export async function unregisterFromPush(token: string | null): Promise<void> {
   } catch {
     /* offline, or the token was already detached server-side — both fine */
   }
+}
+
+export type PushToggleOutcome =
+  | { ok: true; token: string | null }
+  /**
+   * Turning it on didn't work. ``blockedBySystem`` means the OS permission is
+   * denied and can't be re-prompted — the only way back is the system
+   * settings app, so the UI should offer to open it rather than silently
+   * flipping the switch back and leaving the user confused.
+   */
+  | { ok: false; reason: string; blockedBySystem: boolean }
+
+/**
+ * Apply the user's notification on/off choice from Settings.
+ *
+ * Persists the preference either way, so a relaunch doesn't undo it, then
+ * makes it real: registering this device, or detaching it server-side so the
+ * backend has nothing to send to. There's no separate "muted" flag on the
+ * backend — no token *is* the off switch.
+ */
+export async function setPushEnabled(
+  enabled: boolean,
+  currentToken: string | null,
+): Promise<PushToggleOutcome> {
+  if (!enabled) {
+    await setPreference(false)
+    await unregisterFromPush(currentToken)
+    return { ok: true, token: null }
+  }
+
+  // The two environmental blocks below deliberately leave the stored
+  // preference untouched. "Does the user want notifications" and "are
+  // notifications currently possible" are separate axes: someone who taps the
+  // switch in Expo Go, or with the OS permission revoked, still *wants* them.
+  // Preserving that intent means it starts working once they install a dev
+  // build or re-allow the permission, with no need to come back and re-toggle.
+  // The switch itself already renders off in both cases (see
+  // SettingsScreen's `pushOn && !pushBlocked`).
+  const unavailable = pushUnavailableReason()
+  if (unavailable) {
+    return { ok: false, reason: unavailable, blockedBySystem: false }
+  }
+
+  const permission = await Notifications.getPermissionsAsync()
+  if (permission.status !== 'granted' && !permission.canAskAgain) {
+    return {
+      ok: false,
+      blockedBySystem: true,
+      reason: 'Notifications are turned off for Vaultly in your system settings.',
+    }
+  }
+
+  await setPreference(true)
+  const token = await registerForPush()
+  if (!token) {
+    // Permission prompt declined just now, no EAS projectId, or the backend
+    // call failed. Roll the preference back so the switch reflects reality.
+    await setPreference(false)
+    return {
+      ok: false,
+      blockedBySystem: false,
+      reason: 'Could not enable notifications. Please try again.',
+    }
+  }
+  return { ok: true, token }
 }

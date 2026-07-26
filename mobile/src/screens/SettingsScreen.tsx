@@ -1,10 +1,11 @@
-import React, { useState } from 'react'
-import { View, Text, StyleSheet, Alert } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { View, Text, StyleSheet, Alert, Switch, Linking } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
 import { useQueryClient } from '@tanstack/react-query'
 import { changePassword } from '../api/auth'
 import { setToken } from '../api/client'
 import { useAuthStore } from '../stores/authStore'
+import { isPushEnabled, setPushEnabled, pushUnavailableReason } from '../utils/push'
 import Screen from '../components/Screen'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -27,6 +28,43 @@ export default function SettingsScreen() {
   const [deletePassword, setDeletePassword] = useState('')
   const [deleteErr, setDeleteErr] = useState('')
   const [deleting, setDeleting] = useState(false)
+
+  const pushToken = useAuthStore((s) => s.pushToken)
+  const [pushOn, setPushOn] = useState(false)
+  const [pushBusy, setPushBusy] = useState(false)
+  const pushBlocked = pushUnavailableReason()
+
+  useEffect(() => { isPushEnabled().then(setPushOn) }, [])
+
+  async function togglePush(next: boolean) {
+    if (pushBusy) return
+    setPushBusy(true)
+    // Move the switch immediately so it doesn't feel stuck behind the
+    // permission prompt / network call; rolled back below if it fails.
+    setPushOn(next)
+    try {
+      const result = await setPushEnabled(next, pushToken)
+      if (result.ok) {
+        useAuthStore.setState({ pushToken: result.token })
+        return
+      }
+      setPushOn(!next)
+      if (result.blockedBySystem) {
+        Alert.alert(
+          'Notifications are blocked',
+          `${result.reason}\n\nOpen system settings to allow them?`,
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open settings', onPress: () => Linking.openSettings() },
+          ],
+        )
+      } else {
+        Alert.alert('Could not enable notifications', result.reason)
+      }
+    } finally {
+      setPushBusy(false)
+    }
+  }
 
   // Don't leave this account's cached documents/chat/graph data visible to
   // whoever's signed in next on this device.
@@ -86,6 +124,27 @@ export default function SettingsScreen() {
         <Button title="Update password" onPress={save} loading={saving} />
       </Card>
 
+      <Card style={{ gap: 12 }}>
+        <Text style={[styles.section, { color: colors.ink }]}>Notifications</Text>
+        <View style={styles.settingRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.settingLabel, { color: colors.ink }]}>Push notifications</Text>
+            <Text style={[styles.settingHint, { color: colors.inkSoft }]}>
+              {pushBlocked
+                ? pushBlocked
+                : 'Get notified when a document finishes processing.'}
+            </Text>
+          </View>
+          <Switch
+            value={pushOn && !pushBlocked}
+            onValueChange={togglePush}
+            disabled={pushBusy || !!pushBlocked}
+            trackColor={{ true: colors.indigo, false: colors.border }}
+            thumbColor="#fff"
+          />
+        </View>
+      </Card>
+
       {user?.is_admin ? (
         <Card style={{ gap: 12 }}>
           <Text style={[styles.section, { color: colors.ink }]}>Admin</Text>
@@ -130,6 +189,9 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.display, fontSize: 24 },
   email: { fontFamily: fonts.body, fontSize: 14, marginBottom: 4 },
   section: { fontFamily: fonts.displaySemi, fontSize: 16 },
+  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  settingLabel: { fontFamily: fonts.bodyMedium, fontSize: 14 },
+  settingHint: { fontFamily: fonts.body, fontSize: 12, marginTop: 2 },
   err: { fontFamily: fonts.body, fontSize: 13 },
   deleteWarning: { fontFamily: fonts.body, fontSize: 13, lineHeight: 19 },
   version: { fontFamily: fonts.body, fontSize: 12, textAlign: 'center', marginTop: 8 },

@@ -40,11 +40,28 @@ jest.mock('../api/notifications', () => ({
   unregisterDevice: jest.fn().mockResolvedValue({ status: 'unregistered' }),
 }))
 
-import { registerForPush, unregisterFromPush, pushUnavailableReason } from './push'
+// In-memory stand-in for the on-device preference store.
+const prefStore: Record<string, string> = {}
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: jest.fn(async (k: string) => (k in prefStore ? prefStore[k] : null)),
+  setItemAsync: jest.fn(async (k: string, v: string) => { prefStore[k] = v }),
+  deleteItemAsync: jest.fn(async (k: string) => { delete prefStore[k] }),
+}))
+
+import {
+  registerForPush, unregisterFromPush, pushUnavailableReason,
+  isPushEnabled, setPushEnabled,
+} from './push'
 import * as notificationsApi from '../api/notifications'
 
 beforeEach(() => {
   jest.clearAllMocks()
+  // clearAllMocks() resets call history but NOT implementations, so a
+  // mockRejectedValue set by one test would otherwise leak into every test
+  // after it. Re-establish the happy path explicitly.
+  ;(notificationsApi.registerDevice as jest.Mock).mockResolvedValue({ status: 'registered' })
+  ;(notificationsApi.unregisterDevice as jest.Mock).mockResolvedValue({ status: 'unregistered' })
+  for (const k of Object.keys(prefStore)) delete prefStore[k]
   deviceState.isDevice = true
   constantsState.executionEnvironment = 'standalone'
   constantsState.expoConfig = { extra: { eas: { projectId: 'proj-123' } } }
@@ -132,6 +149,93 @@ describe('registration', () => {
   test('an expo-notifications failure never throws', async () => {
     mockGetToken.mockRejectedValue(new Error('no push capability'))
     expect(await registerForPush()).toBeNull()
+  })
+})
+
+describe('user on/off preference', () => {
+  test('defaults to on for a fresh install (opt-out, not opt-in)', async () => {
+    expect(await isPushEnabled()).toBe(true)
+  })
+
+  test('turning it off detaches the device and persists the choice', async () => {
+    const result = await setPushEnabled(false, 'ExponentPushToken[abc123]')
+    expect(result).toEqual({ ok: true, token: null })
+    expect(notificationsApi.unregisterDevice).toHaveBeenCalledWith('ExponentPushToken[abc123]')
+    expect(await isPushEnabled()).toBe(false)
+  })
+
+  test('turning it back on re-registers', async () => {
+    await setPushEnabled(false, 'ExponentPushToken[abc123]')
+    const result = await setPushEnabled(true, null)
+    expect(result).toEqual({ ok: true, token: 'ExponentPushToken[abc123]' })
+    expect(notificationsApi.registerDevice).toHaveBeenCalled()
+    expect(await isPushEnabled()).toBe(true)
+  })
+
+  test('auto-registration respects "off" — the relaunch case', async () => {
+    // The bug this guards: authStore re-registers on every launch of a
+    // restored session, which would silently undo the user's choice.
+    await setPushEnabled(false, 'ExponentPushToken[abc123]')
+    ;(notificationsApi.registerDevice as jest.Mock).mockClear()
+
+    expect(await registerForPush()).toBeNull()
+    expect(notificationsApi.registerDevice).not.toHaveBeenCalled()
+    expect(mockGetToken).not.toHaveBeenCalled()
+  })
+
+  test('a permanent OS denial reports blockedBySystem so the UI can offer settings', async () => {
+    mockGetPermissions.mockResolvedValue({ status: 'denied', canAskAgain: false })
+    const result = await setPushEnabled(true, null)
+    expect(result).toEqual({
+      ok: false,
+      blockedBySystem: true,
+      reason: expect.stringMatching(/system settings/i),
+    })
+    expect(notificationsApi.registerDevice).not.toHaveBeenCalled()
+  })
+
+  test('an OS-blocked attempt preserves the user\'s intent for when they re-allow it', async () => {
+    // "Wants notifications" and "notifications are currently possible" are
+    // separate axes. Storing false here would mean that after re-allowing the
+    // permission in system settings, they'd have to come back and toggle
+    // again — the app would stay silent for no visible reason.
+    mockGetPermissions.mockResolvedValue({ status: 'denied', canAskAgain: false })
+    await setPushEnabled(true, null)
+    expect(await isPushEnabled()).toBe(true)
+
+    // Permission restored out-of-band: registration now succeeds unprompted.
+    mockGetPermissions.mockResolvedValue({ status: 'granted', canAskAgain: true })
+    expect(await registerForPush()).toBe('ExponentPushToken[abc123]')
+  })
+
+  test('failing to enable rolls the preference back so the switch matches reality', async () => {
+    mockGetToken.mockRejectedValue(new Error('no push capability'))
+    const result = await setPushEnabled(true, null)
+    expect(result.ok).toBe(false)
+    expect(await isPushEnabled()).toBe(false)
+  })
+
+  test('cannot be switched on in Expo Go, and says why', async () => {
+    constantsState.executionEnvironment = 'storeClient'
+    const result = await setPushEnabled(true, null)
+    expect(result).toEqual({
+      ok: false,
+      blockedBySystem: false,
+      reason: expect.stringMatching(/development build/i),
+    })
+    expect(notificationsApi.registerDevice).not.toHaveBeenCalled()
+    // Same intent-preservation as the OS-denial case above: installing a dev
+    // build later should just work without re-toggling.
+    expect(await isPushEnabled()).toBe(true)
+  })
+
+  test('turning it off still works when the backend is unreachable', async () => {
+    ;(notificationsApi.unregisterDevice as jest.Mock).mockRejectedValue(new Error('offline'))
+    const result = await setPushEnabled(false, 'ExponentPushToken[abc123]')
+    expect(result).toEqual({ ok: true, token: null })
+    // The local preference is what stops future registration, so the user's
+    // choice sticks even though the server still holds the token.
+    expect(await isPushEnabled()).toBe(false)
   })
 })
 
