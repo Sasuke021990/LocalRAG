@@ -10,12 +10,14 @@ import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import DocumentRow from '../components/DocumentRow'
 import PoolPickerSheet from '../components/PoolPickerSheet'
+import Skeleton from '../components/Skeleton'
 import {
   fetchDocuments, fetchPools, uploadWithProgress, deleteDocument, moveDocument, deletePool,
   IMAGE_MIME_TYPES, DOCUMENT_MIME_TYPES, type Doc,
 } from '../api/documents'
 import { useAuthStore } from '../stores/authStore'
 import { useAppTheme } from '../theme/ThemeContext'
+import { tapLight, tapMedium, notifySuccess, notifyError } from '../utils/haptics'
 import { fonts, radius } from '../theme/tokens'
 
 // What the pool-picker sheet is currently open for -- one shared sheet
@@ -62,6 +64,7 @@ export default function KnowledgeScreen() {
     })
     if (res.canceled || !res.assets?.length) return
     const f = res.assets[0]
+    tapLight()
     setUploading(true)
     setIsImage(IMAGE_MIME_TYPES.includes(f.mimeType || ''))
     setProgressPct(0)
@@ -79,12 +82,18 @@ export default function KnowledgeScreen() {
       setUploadPool('')
       refresh()
       if (streamError) {
+        notifyError()
         Alert.alert(
           'Upload sent, but progress was lost',
           `${streamError}\n\nThe document is likely still processing — pull to refresh in a moment.`,
         )
+      } else {
+        // Processing a large document takes long enough that users look
+        // away — the same reason the push notification exists.
+        notifySuccess()
       }
     } catch (e: any) {
+      notifyError()
       Alert.alert('Upload failed', e.message || 'Please try again.')
     } finally {
       setUploading(false)
@@ -94,7 +103,10 @@ export default function KnowledgeScreen() {
   function confirmDelete(doc: Doc) {
     Alert.alert('Delete document?', `"${doc.file_name}" will be removed permanently.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => { await deleteDocument(doc.file_name, doc.pool); refresh() } },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => { tapMedium(); await deleteDocument(doc.file_name, doc.pool); refresh() },
+      },
     ])
   }
 
@@ -197,7 +209,21 @@ export default function KnowledgeScreen() {
         </Card>
       )}
 
-      {docs.length === 0 ? (
+      {docsQ.isLoading ? (
+        // Previously this window rendered "No documents yet" — telling a user
+        // with a full library that it was empty, until the fetch resolved.
+        <Card style={{ gap: 14 }}>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Skeleton width={36} height={36} />
+              <View style={{ flex: 1, gap: 6 }}>
+                <Skeleton width="60%" height={13} />
+                <Skeleton width="35%" height={11} />
+              </View>
+            </View>
+          ))}
+        </Card>
+      ) : docs.length === 0 ? (
         <Card><Text style={[styles.empty, { color: colors.inkSoft }]}>No documents yet. Upload your first above.</Text></Card>
       ) : (
         groupedEntries.map(([pool, list]) => (

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import * as chatApi from '../api/chat'
 import { streamQuery, type Source } from '../api/query'
 import { queryClient } from '../api/queryClient'
+import { notifySuccess, notifyError } from '../utils/haptics'
 
 export interface ChatMsg {
   query: string
@@ -158,6 +159,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (d.conversation_id) set({ activeConversationId: d.conversation_id })
         inFlight = null
         set({ loading: false })
+        // An answer can take tens of seconds; users look away. A success tap
+        // tells them it landed without needing to watch the screen.
+        notifySuccess()
         get().loadConversations()
         // This answer just consumed one of the day's AI questions — refresh
         // the cached subscription so the quota indicators (Home, Chat header)
@@ -172,6 +176,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         patch({ streaming: false, error: e?.message || 'Something went wrong. Please try again.' })
         inFlight = null
         set({ loading: false })
+        notifyError()
         // The backend counts a question at dispatch, before generation — so a
         // failed answer still spent quota. Refresh here too, or the indicator
         // would over-report what's left.

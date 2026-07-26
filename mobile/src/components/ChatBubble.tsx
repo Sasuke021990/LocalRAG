@@ -4,7 +4,10 @@ import * as Clipboard from 'expo-clipboard'
 import Markdown from 'react-native-markdown-display'
 import { Sparkles, SearchX, TriangleAlert, ChevronDown, FileText, FolderOpen, Copy, Check, RotateCw } from 'lucide-react-native'
 import Badge from './ui/Badge'
+import FadeIn from './FadeIn'
+import StreamingCursor from './StreamingCursor'
 import { useAppTheme } from '../theme/ThemeContext'
+import { tapLight } from '../utils/haptics'
 import { fonts, radius, type ColorTokens } from '../theme/tokens'
 import type { Source } from '../api/query'
 
@@ -29,6 +32,7 @@ export default function ChatBubble({ msg, onRetry }: { msg: ChatMsg; onRetry?: (
 
   async function copyAnswer() {
     await Clipboard.setStringAsync(msg.answer)
+    tapLight()
     // Inline confirmation instead of a toast/alert — copying is a low-stakes
     // action and an interrupting dialog would be heavier than the action.
     setCopied(true)
@@ -56,7 +60,7 @@ export default function ChatBubble({ msg, onRetry }: { msg: ChatMsg; onRetry?: (
   })()
 
   return (
-    <View style={{ gap: 10, marginBottom: 16 }}>
+    <FadeIn style={{ gap: 10, marginBottom: 16 }}>
       {/* Query */}
       <View style={styles.queryWrap}>
         <View style={[styles.queryBubble, { backgroundColor: colors.indigoSoft }]}>
@@ -110,7 +114,7 @@ export default function ChatBubble({ msg, onRetry }: { msg: ChatMsg; onRetry?: (
             ) : (
               <>
                 <Markdown style={mdStyle}>{msg.answer || ''}</Markdown>
-                {msg.streaming ? <Text style={[styles.cursor, { color: colors.pink }]}> ▍</Text> : null}
+                {msg.streaming ? <StreamingCursor /> : null}
               </>
             )}
 
@@ -165,7 +169,7 @@ export default function ChatBubble({ msg, onRetry }: { msg: ChatMsg; onRetry?: (
           ) : null}
         </View>
       </View>
-    </View>
+    </FadeIn>
   )
 }
 

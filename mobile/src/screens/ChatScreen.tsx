@@ -10,6 +10,7 @@ import PoolPickerModal from '../components/PoolPickerModal'
 import { useChatStore } from '../stores/chatStore'
 import { fetchPools } from '../api/documents'
 import { useAppTheme } from '../theme/ThemeContext'
+import { tapLight, tapMedium } from '../utils/haptics'
 import { fonts, radius } from '../theme/tokens'
 
 export default function ChatScreen() {
@@ -41,8 +42,15 @@ export default function ChatScreen() {
   function send() {
     const q = text.trim()
     if (!q || loading) return
+    tapLight()
     setText('')
     submit(q)
+  }
+
+  function stopGenerating() {
+    // Heavier than send: interrupting something already in motion.
+    tapMedium()
+    stop()
   }
 
   function choose(p: string) {
@@ -121,7 +129,7 @@ export default function ChatScreen() {
           {loading ? (
             <Pressable
               style={[styles.send, { backgroundColor: colors.rose }]}
-              onPress={stop}
+              onPress={stopGenerating}
               accessibilityRole="button"
               accessibilityLabel="Stop generating"
             >
