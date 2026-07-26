@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { View, Text, StyleSheet } from 'react-native'
+import React, { useRef, useState } from 'react'
+import { View, Text, StyleSheet, TextInput } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useAuthStore } from '../../stores/authStore'
 import Screen from '../../components/Screen'
@@ -20,6 +20,7 @@ export default function LoginScreen({ navigation }: Props) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const passwordRef = useRef<TextInput>(null)
 
   async function submit() {
     setError(''); setLoading(true)
@@ -44,8 +45,34 @@ export default function LoginScreen({ navigation }: Props) {
       <Text style={[styles.subtitle, { color: colors.inkSoft }]}>Sign in to your knowledge base.</Text>
 
       <Card style={{ gap: 12 }}>
-        <Input label="Email or username" value={email} onChangeText={setEmail} autoCapitalize="none" placeholder="you@example.com" />
-        <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
+        <Input
+          label="Email or username"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          placeholder="you@example.com"
+          // email-address rather than a stricter type: this field also
+          // accepts a plain username, so the keyboard should offer @ and .
+          // without restricting what can be typed.
+          keyboardType="email-address"
+          autoComplete="username"
+          textContentType="username"
+          returnKeyType="next"
+          onSubmitEditing={() => passwordRef.current?.focus()}
+          submitBehavior="submit"
+        />
+        <Input
+          ref={passwordRef}
+          label="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          placeholder="••••••••"
+          autoComplete="current-password"
+          textContentType="password"
+          returnKeyType="go"
+          onSubmitEditing={submit}
+        />
         {error ? <Text style={[styles.error, { color: colors.rose }]}>{error}</Text> : null}
         <Button title="Sign in" onPress={submit} loading={loading} />
       </Card>

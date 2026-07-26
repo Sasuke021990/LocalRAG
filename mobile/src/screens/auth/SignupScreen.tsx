@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { View, Text, StyleSheet } from 'react-native'
+import React, { useRef, useState } from 'react'
+import { View, Text, StyleSheet, TextInput } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useAuthStore } from '../../stores/authStore'
 import Screen from '../../components/Screen'
@@ -22,6 +22,9 @@ export default function SignupScreen({ navigation }: Props) {
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const emailRef = useRef<TextInput>(null)
+  const passwordRef = useRef<TextInput>(null)
+  const confirmRef = useRef<TextInput>(null)
 
   async function submit() {
     setError('')
@@ -40,10 +43,59 @@ export default function SignupScreen({ navigation }: Props) {
       <Text style={[styles.subtitle, { color: colors.inkSoft }]}>1 GB free — your documents, always yours.</Text>
 
       <Card style={{ gap: 12 }}>
-        <Input label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" placeholder="e.g. alice" />
-        <Input label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder="you@example.com" />
-        <Input label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 8 characters" />
-        <Input label="Confirm password" value={confirm} onChangeText={setConfirm} secureTextEntry placeholder="••••••••" />
+        <Input
+          label="Username"
+          value={username}
+          onChangeText={setUsername}
+          autoCapitalize="none"
+          placeholder="e.g. alice"
+          autoComplete="username-new"
+          textContentType="username"
+          returnKeyType="next"
+          onSubmitEditing={() => emailRef.current?.focus()}
+          submitBehavior="submit"
+        />
+        <Input
+          ref={emailRef}
+          label="Email"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          placeholder="you@example.com"
+          autoComplete="email"
+          textContentType="emailAddress"
+          returnKeyType="next"
+          onSubmitEditing={() => passwordRef.current?.focus()}
+          submitBehavior="submit"
+        />
+        <Input
+          ref={passwordRef}
+          label="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          placeholder="At least 8 characters"
+          // new-password lets a password manager offer to generate/save one
+          // rather than trying to autofill an existing credential.
+          autoComplete="new-password"
+          textContentType="newPassword"
+          returnKeyType="next"
+          onSubmitEditing={() => confirmRef.current?.focus()}
+          submitBehavior="submit"
+        />
+        <Input
+          ref={confirmRef}
+          label="Confirm password"
+          value={confirm}
+          onChangeText={setConfirm}
+          secureTextEntry
+          placeholder="••••••••"
+          autoComplete="new-password"
+          textContentType="newPassword"
+          returnKeyType="go"
+          onSubmitEditing={submit}
+        />
         {error ? <Text style={[styles.error, { color: colors.rose }]}>{error}</Text> : null}
         <Button title="Create account" onPress={submit} loading={loading} />
       </Card>

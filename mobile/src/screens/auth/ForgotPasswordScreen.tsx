@@ -35,7 +35,17 @@ export default function ForgotPasswordScreen({ navigation }: Props) {
           </>
         ) : (
           <>
-            <Input label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" />
+            <Input
+              label="Email"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              placeholder="you@example.com"
+              autoComplete="email"
+              textContentType="emailAddress"
+              returnKeyType="go"
+              onSubmitEditing={submit}
+            />
             <Button title="Send reset link" onPress={submit} />
             <Text style={[styles.link, { color: colors.indigo }]} onPress={() => navigation.navigate('Login')}>Back to sign in</Text>
           </>

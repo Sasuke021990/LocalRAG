@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { View, Text, StyleSheet, Alert, Switch, Linking } from 'react-native'
+import React, { useEffect, useRef, useState } from 'react'
+import { View, Text, StyleSheet, Alert, Switch, Linking, TextInput } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
 import { useQueryClient } from '@tanstack/react-query'
 import { changePassword } from '../api/auth'
@@ -23,6 +23,8 @@ export default function SettingsScreen() {
   const [confirm, setConfirm] = useState('')
   const [err, setErr] = useState('')
   const [saving, setSaving] = useState(false)
+  const nextRef = useRef<TextInput>(null)
+  const confirmRef = useRef<TextInput>(null)
 
   const [showDelete, setShowDelete] = useState(false)
   const [deletePassword, setDeletePassword] = useState('')
@@ -127,9 +129,40 @@ export default function SettingsScreen() {
 
       <Card style={{ gap: 12 }}>
         <Text style={[styles.section, { color: colors.ink }]}>Change password</Text>
-        <Input label="Current password" value={cur} onChangeText={setCur} secureTextEntry />
-        <Input label="New password" value={next} onChangeText={setNext} secureTextEntry />
-        <Input label="Confirm new password" value={confirm} onChangeText={setConfirm} secureTextEntry />
+        <Input
+          label="Current password"
+          value={cur}
+          onChangeText={setCur}
+          secureTextEntry
+          autoComplete="current-password"
+          textContentType="password"
+          returnKeyType="next"
+          onSubmitEditing={() => nextRef.current?.focus()}
+          submitBehavior="submit"
+        />
+        <Input
+          ref={nextRef}
+          label="New password"
+          value={next}
+          onChangeText={setNext}
+          secureTextEntry
+          autoComplete="new-password"
+          textContentType="newPassword"
+          returnKeyType="next"
+          onSubmitEditing={() => confirmRef.current?.focus()}
+          submitBehavior="submit"
+        />
+        <Input
+          ref={confirmRef}
+          label="Confirm new password"
+          value={confirm}
+          onChangeText={setConfirm}
+          secureTextEntry
+          autoComplete="new-password"
+          textContentType="newPassword"
+          returnKeyType="go"
+          onSubmitEditing={save}
+        />
         {err ? <Text style={[styles.err, { color: colors.rose }]}>{err}</Text> : null}
         <Button title="Update password" onPress={save} loading={saving} />
       </Card>
