@@ -82,25 +82,37 @@ describe('rendering', () => {
   })
 })
 
-describe('warning states', () => {
-  test('no warning while comfortably under the limit', async () => {
-    mockFetchSubscription.mockResolvedValue(SUB({ ai_questions_used_today: 1 }))
+describe('warning states (paid plans — Free is covered separately below)', () => {
+  test('no warning while comfortably above the 50% threshold', async () => {
+    // limit 20 -> threshold is 10 remaining; 15 remaining is well clear of it.
+    mockFetchSubscription.mockResolvedValue(SUB({ plan: 'pro', ai_questions_used_today: 5 }))
     renderBar()
     await screen.findByText('AI answers today')
     expect(screen.queryByText(/Running low/)).toBeNull()
     expect(screen.queryByText(/resets tomorrow/)).toBeNull()
   })
 
-  test('warns when running low (within 20% of the allowance)', async () => {
-    mockFetchSubscription.mockResolvedValue(SUB({ ai_questions_used_today: 17 })) // 3 of 20 left
+  test('does not warn one question above the 50% boundary', async () => {
+    // limit 20 -> threshold is 10 remaining; 11 remaining must not warn yet.
+    mockFetchSubscription.mockResolvedValue(SUB({ plan: 'pro', ai_questions_used_today: 9 }))
+    renderBar()
+    await screen.findByText('AI answers today')
+    expect(screen.queryByText(/Running low/)).toBeNull()
+  })
+
+  test('warns exactly at the 50% boundary', async () => {
+    // limit 20 -> threshold is 10 remaining; 10 remaining should warn.
+    mockFetchSubscription.mockResolvedValue(SUB({ plan: 'pro', ai_questions_used_today: 10 }))
     renderBar()
     expect(await screen.findByText(/Running low/)).toBeTruthy()
   })
 
   test('warns on a small plan before it is too late to matter', async () => {
-    // 20% of 5 rounds down to 1 — a one-question warning is useless, so the
-    // threshold has a floor of 3.
-    mockFetchSubscription.mockResolvedValue(SUB({ ai_questions_per_day: 5, ai_questions_used_today: 2 }))
+    // floor(5 * 0.5) = 2, but the floor of 3 wins: max(3, 2) = 3. Without
+    // that floor, a 5/day plan would only warn with 2 questions left.
+    mockFetchSubscription.mockResolvedValue(
+      SUB({ plan: 'pro', ai_questions_per_day: 5, ai_questions_used_today: 2 }),
+    )
     renderBar()
     expect(await screen.findByText(/Running low/)).toBeTruthy()
   })
@@ -122,6 +134,33 @@ describe('warning states', () => {
     await screen.findByText(/resets tomorrow/)
     expect(screen.getByText('0')).toBeTruthy()
     expect(screen.getByText('20 of 20 used')).toBeTruthy()
+  })
+})
+
+describe('Free plan skips the "running low" stage', () => {
+  // Free's allowance is small enough, and the upgrade nudge pointed enough,
+  // that an early warning reads as nagging rather than useful notice — it
+  // goes straight from normal to exhausted with nothing amber in between.
+  test('no warning even at the boundary that would trigger it on a paid plan', async () => {
+    mockFetchSubscription.mockResolvedValue(SUB({ plan: 'free', ai_questions_used_today: 10 })) // 10 of 20 left
+    renderBar()
+    await screen.findByText('AI answers today')
+    expect(screen.queryByText(/Running low/)).toBeNull()
+  })
+
+  test('no warning one question before exhaustion', async () => {
+    mockFetchSubscription.mockResolvedValue(SUB({ plan: 'free', ai_questions_used_today: 19 }))
+    renderBar()
+    await screen.findByText('AI answers today')
+    expect(screen.queryByText(/Running low/)).toBeNull()
+  })
+
+  test('still reports exhausted at zero remaining', async () => {
+    // The floor doesn't apply here — only the amber "running low" stage is
+    // skipped. Free still gets the rose "limit reached" state.
+    mockFetchSubscription.mockResolvedValue(SUB({ plan: 'free', ai_questions_used_today: 20 }))
+    renderBar()
+    expect(await screen.findByText(/resets tomorrow/)).toBeTruthy()
   })
 })
 

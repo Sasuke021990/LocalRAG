@@ -17,11 +17,12 @@ import { fonts, radius } from '../theme/tokens'
  * questions are spent.
  */
 
-// Warn while there's still time to act on it: a fifth of the allowance left,
-// or three questions, whichever is larger. The floor matters for small plans
-// where 20% of 5 rounds down to 1 — too late to be a useful warning.
+// Warn while there's still time to act on it: half the allowance left, or
+// three questions, whichever is larger. The floor matters for small plans
+// where 50% of 5 still rounds down close to the limit itself — it keeps a
+// firm floor of 3 rather than trusting the percentage alone on tiny plans.
 function isRunningLow(remaining: number, limit: number): boolean {
-  return remaining > 0 && remaining <= Math.max(3, Math.floor(limit * 0.2))
+  return remaining > 0 && remaining <= Math.max(3, Math.floor(limit * 0.5))
 }
 
 export default function AiQuotaBar({ compact = false }: { compact?: boolean }) {
@@ -40,7 +41,11 @@ export default function AiQuotaBar({ compact = false }: { compact?: boolean }) {
   const pct = Math.min(100, (used / limit) * 100)
 
   const exhausted = remaining === 0
-  const low = isRunningLow(remaining, limit)
+  // Free plan skips the amber "running low" stage entirely — normal all the
+  // way to exhausted. Its allowance is small enough (and the upgrade nudge
+  // pointed enough) that an early warning reads as nagging rather than
+  // useful notice; paid plans keep it.
+  const low = data.plan !== 'free' && isRunningLow(remaining, limit)
   const accent = exhausted ? colors.rose : low ? colors.amber : colors.indigo
 
   const label = exhausted
