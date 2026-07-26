@@ -113,3 +113,77 @@ describe('streamQuery', () => {
     expect(h.onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'Server unavailable' }))
   })
 })
+
+// ── Stop generation (task.md P2 #22) ───────────────────────────────────────
+
+test('the abort signal is forwarded so the backend can cancel generation', async () => {
+  const controller = new AbortController()
+  ;(expoFetch as jest.Mock).mockResolvedValue(
+    fakeStreamResponse(true, 200, ['event: done\ndata: {"answer":"hi"}\n\n']),
+  )
+
+  await streamQuery('q', { signal: controller.signal }, {})
+
+  // main.py's query_stream watches for the closed connection this produces.
+  expect((expoFetch as jest.Mock).mock.calls[0][1].signal).toBe(controller.signal)
+})
+
+test('an aborted request is not reported as an error', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  ;(expoFetch as jest.Mock).mockRejectedValue(
+    Object.assign(new Error('Aborted'), { name: 'AbortError' }),
+  )
+  const onError = jest.fn()
+
+  await streamQuery('q', { signal: controller.signal }, { onError })
+
+  // A deliberate stop must not paint a red failure bubble over the answer
+  // the user chose to end.
+  expect(onError).not.toHaveBeenCalled()
+})
+
+test('an aborted request does not fall back and re-run the query', async () => {
+  // Falling back would re-charge the daily AI quota for a question the user
+  // just cancelled.
+  const controller = new AbortController()
+  controller.abort()
+  ;(expoFetch as jest.Mock).mockRejectedValue(new Error('Aborted'))
+
+  await streamQuery('q', { signal: controller.signal }, {})
+
+  expect(request).not.toHaveBeenCalled()
+})
+
+test('a mid-stream abort stops dispatching further frames', async () => {
+  const controller = new AbortController()
+  const onToken = jest.fn((t: string) => {
+    // Cancel as soon as the first token lands.
+    if (t === 'one') controller.abort()
+  })
+  ;(expoFetch as jest.Mock).mockResolvedValue(
+    fakeStreamResponse(true, 200, [
+      'event: token\ndata: "one"\n\n',
+      'event: token\ndata: "two"\n\n',
+      'event: token\ndata: "three"\n\n',
+    ]),
+  )
+
+  await streamQuery('q', { signal: controller.signal }, { onToken })
+
+  expect(onToken).toHaveBeenCalledWith('one')
+  expect(onToken).not.toHaveBeenCalledWith('three')
+})
+
+test('a normal request without a signal still works', async () => {
+  ;(expoFetch as jest.Mock).mockResolvedValue(
+    fakeStreamResponse(true, 200, ['event: token\ndata: "hello"\n\n']),
+  )
+  const onToken = jest.fn()
+  const onError = jest.fn()
+
+  await streamQuery('q', {}, { onToken, onError })
+
+  expect(onToken).toHaveBeenCalledWith('hello')
+  expect(onError).not.toHaveBeenCalled()
+})

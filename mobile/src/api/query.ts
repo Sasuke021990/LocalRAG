@@ -34,6 +34,13 @@ export interface StreamOptions {
   rerankTopK?: number
   pool?: string
   conversationId?: string
+  // Aborting this closes the HTTP connection, which is what the backend
+  // watches for: main.py's query_stream checks `is_disconnected()` before
+  // every yield and calls `agen.aclose()`, propagating cancellation down
+  // into the LLM backend so the inference server actually stops generating
+  // (see generation/llm.py's cancel_event). Without this the model would
+  // keep producing tokens nobody will read.
+  signal?: AbortSignal
 }
 
 /**
@@ -48,7 +55,7 @@ export interface StreamOptions {
  * otherwise the one passed in.
  */
 export async function streamQuery(query: string, opts: StreamOptions = {}, h: StreamHandlers = {}) {
-  const { topK = 10, rerankTopK = 5, pool = '', conversationId = '' } = opts
+  const { topK = 10, rerankTopK = 5, pool = '', conversationId = '', signal } = opts
 
   // Whether the initial streaming attempt got far enough that a failure
   // from here on is a genuine backend error (bad response, quota, etc.)
@@ -68,6 +75,7 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
         query, top_k: topK, rerank_top_k: rerankTopK,
         pool: pool || null, conversation_id: conversationId || null,
       }),
+      signal,
     })
     if (!res.ok) {
       // A real backend error (quota exceeded, server error, etc.) — the
@@ -80,6 +88,12 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
     }
     reader = (res as any).body?.getReader?.()
   } catch (err: any) {
+    // A user-initiated stop aborts the fetch, which surfaces here as a
+    // rejection. That's a deliberate cancellation, not a failure: reporting
+    // it via onError would paint a red "something went wrong" bubble over an
+    // answer the user chose to stop, and falling back would re-run the query
+    // they just cancelled (double-charging their daily quota).
+    if (signal?.aborted) return
     if (err?.status) { h.onError?.(err); return } // real HTTP error — already reported, don't fall back
     reader = undefined // network-level failure before we even got a response — fall back
   }
@@ -89,8 +103,8 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
     // itself failed at the network level — either way, try exactly once
     // more via the plain /query endpoint. A failure here is real and must
     // reach onError, not be silently retried again.
-    try { await fallback(query, topK, rerankTopK, pool, conversationId, h) }
-    catch (err: any) { h.onError?.(err) }
+    try { await fallback(query, topK, rerankTopK, pool, conversationId, h, signal) }
+    catch (err: any) { if (!signal?.aborted) h.onError?.(err) }
     return
   }
 
@@ -98,6 +112,9 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
     const decoder = new TextDecoder()
     let buffer = ''
     while (true) {
+      // Stop pulling the moment the user cancels, rather than draining
+      // whatever the server already queued.
+      if (signal?.aborted) { reader.cancel?.().catch?.(() => {}); return }
       const { value, done } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
@@ -110,6 +127,9 @@ export async function streamQuery(query: string, opts: StreamOptions = {}, h: St
       }
     }
   } catch (err: any) {
+    // Same reasoning as the pre-response abort above: a cancelled read is
+    // the user's own doing, not an error to surface.
+    if (signal?.aborted) return
     // A stream that started but broke mid-flight (dropped connection, server
     // error) — this is a real failure, not a "no stream support" case, so it
     // must reach onError directly rather than silently retrying the query a
@@ -136,8 +156,12 @@ function dispatch(frame: string, h: StreamHandlers) {
   else if (event === 'error') h.onError?.(new Error(data?.detail || 'stream error'))
 }
 
-async function fallback(query: string, topK: number, rerankTopK: number, pool: string, conversationId: string, h: StreamHandlers) {
+async function fallback(
+  query: string, topK: number, rerankTopK: number, pool: string, conversationId: string,
+  h: StreamHandlers, signal?: AbortSignal,
+) {
   const res = await sendQuery(query, topK, rerankTopK, pool, conversationId)
+  if (signal?.aborted) return
   h.onSources?.(res.sources || [])
   if (res.refused) {
     h.onRefusal?.(res.answer)
@@ -145,9 +169,11 @@ async function fallback(query: string, topK: number, rerankTopK: number, pool: s
     return
   }
   if (res.reasoning) h.onThinking?.(res.reasoning)
-  // Typewriter reveal.
+  // Typewriter reveal. The answer is already fully in hand here, so stopping
+  // only halts the reveal — nothing upstream is still generating.
   const words = (res.answer || '').split(/(\s+)/)
   for (const w of words) {
+    if (signal?.aborted) return
     h.onToken?.(w)
     await new Promise((r) => setTimeout(r, 30))
   }

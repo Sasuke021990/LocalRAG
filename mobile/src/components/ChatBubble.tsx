@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react'
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native'
+import * as Clipboard from 'expo-clipboard'
 import Markdown from 'react-native-markdown-display'
-import { Sparkles, SearchX, TriangleAlert, ChevronDown, FileText, FolderOpen } from 'lucide-react-native'
+import { Sparkles, SearchX, TriangleAlert, ChevronDown, FileText, FolderOpen, Copy, Check, RotateCw } from 'lucide-react-native'
 import Badge from './ui/Badge'
 import { useAppTheme } from '../theme/ThemeContext'
 import { fonts, radius, type ColorTokens } from '../theme/tokens'
@@ -21,9 +22,18 @@ export interface ChatMsg {
   error?: string
 }
 
-export default function ChatBubble({ msg }: { msg: ChatMsg }) {
+export default function ChatBubble({ msg, onRetry }: { msg: ChatMsg; onRetry?: () => void }) {
   const [showThinking, setShowThinking] = useState(false)
+  const [copied, setCopied] = useState(false)
   const { colors } = useAppTheme()
+
+  async function copyAnswer() {
+    await Clipboard.setStringAsync(msg.answer)
+    // Inline confirmation instead of a toast/alert — copying is a low-stakes
+    // action and an interrupting dialog would be heavier than the action.
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
 
   // Unique source document names — a compact row instead of a full passage
   // list; multiple chunks commonly come from the same document.
@@ -113,6 +123,46 @@ export default function ChatBubble({ msg }: { msg: ChatMsg }) {
               </View>
             ) : null}
           </View>
+
+          {/* Message actions (task.md P2 #22). Hidden while streaming —
+              copying a half-written answer or retrying mid-flight are both
+              nonsense; the composer's Stop button covers that window. */}
+          {!msg.streaming && (msg.answer || msg.error) ? (
+            <View style={styles.actionsRow}>
+              {msg.answer ? (
+                <Pressable
+                  style={styles.actionBtn}
+                  onPress={copyAnswer}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Copy answer"
+                >
+                  {copied
+                    ? <Check color={colors.emerald} size={14} />
+                    : <Copy color={colors.inkMuted} size={14} />}
+                  <Text style={[styles.actionText, { color: copied ? colors.emerald : colors.inkMuted }]}>
+                    {copied ? 'Copied' : 'Copy'}
+                  </Text>
+                </Pressable>
+              ) : null}
+              {/* Retry is offered only on a turn that failed or was stopped.
+                  A completed answer was already persisted server-side, so
+                  re-running it would append a duplicate turn to the stored
+                  conversation rather than replace it. */}
+              {onRetry && (msg.error || !msg.answer) ? (
+                <Pressable
+                  style={styles.actionBtn}
+                  onPress={onRetry}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry this question"
+                >
+                  <RotateCw color={colors.indigo} size={14} />
+                  <Text style={[styles.actionText, { color: colors.indigo }]}>Retry</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </View>
     </View>
@@ -167,4 +217,9 @@ const styles = StyleSheet.create({
   errorText: { fontFamily: fonts.body, fontSize: 14, lineHeight: 20 },
   cursor: { fontSize: 16 },
   sourcesRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1 },
+  actionsRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 6, paddingLeft: 2 },
+  // Roomy tap target without visually enlarging the control (task.md P1 #15
+  // called out the same problem on the document rows).
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 6, paddingRight: 4 },
+  actionText: { fontFamily: fonts.bodyMedium, fontSize: 12 },
 })

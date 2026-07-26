@@ -3,7 +3,7 @@ import { View, TextInput, StyleSheet, FlatList, Pressable, Text, KeyboardAvoidin
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import { useQuery } from '@tanstack/react-query'
-import { Send, Sparkles, History, FolderOpen, ChevronDown, SquarePen } from 'lucide-react-native'
+import { Send, Sparkles, History, FolderOpen, ChevronDown, SquarePen, Square } from 'lucide-react-native'
 import ChatBubble from '../components/ChatBubble'
 import AiQuotaBar from '../components/AiQuotaBar'
 import PoolPickerModal from '../components/PoolPickerModal'
@@ -21,6 +21,8 @@ export default function ChatScreen() {
   const choosePool = useChatStore((s) => s.choosePool)
   const submit = useChatStore((s) => s.submit)
   const newChat = useChatStore((s) => s.newChat)
+  const stop = useChatStore((s) => s.stop)
+  const retry = useChatStore((s) => s.retry)
   const { colors } = useAppTheme()
 
   const [text, setText] = useState('')
@@ -93,7 +95,12 @@ export default function ChatScreen() {
             ref={listRef}
             data={history}
             keyExtractor={(_, i) => String(i)}
-            renderItem={({ item }) => <ChatBubble msg={item} />}
+            renderItem={({ item, index }) => (
+              // Retry re-runs the last turn, so only the newest bubble can
+              // offer it — retrying an older one would discard everything
+              // after it.
+              <ChatBubble msg={item} onRetry={index === history.length - 1 ? retry : undefined} />
+            )}
             contentContainerStyle={{ padding: 16 }}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
           />
@@ -108,9 +115,29 @@ export default function ChatScreen() {
             placeholderTextColor={colors.inkMuted}
             multiline
           />
-          <Pressable style={[styles.send, { backgroundColor: colors.indigo }]} onPress={send} disabled={loading || !text.trim()}>
-            <Send color="#fff" size={18} />
-          </Pressable>
+          {/* Send doubles as Stop while an answer streams — the composer is
+              where the user's attention already is, and a separate floating
+              control would compete with it. */}
+          {loading ? (
+            <Pressable
+              style={[styles.send, { backgroundColor: colors.rose }]}
+              onPress={stop}
+              accessibilityRole="button"
+              accessibilityLabel="Stop generating"
+            >
+              <Square color="#fff" size={16} fill="#fff" />
+            </Pressable>
+          ) : (
+            <Pressable
+              style={[styles.send, { backgroundColor: colors.indigo, opacity: text.trim() ? 1 : 0.5 }]}
+              onPress={send}
+              disabled={!text.trim()}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+            >
+              <Send color="#fff" size={18} />
+            </Pressable>
+          )}
         </View>
       </KeyboardAvoidingView>
 

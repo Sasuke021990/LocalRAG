@@ -40,7 +40,14 @@ interface ChatState {
   renameConversation: (id: string, title: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
   submit: (query: string) => void
+  stop: () => void
+  retry: () => void
 }
+
+// The in-flight request's abort handle. Kept outside the store because it's
+// a transient control object, not renderable state — `loading` is what the
+// UI actually watches.
+let inFlight: AbortController | null = null
 
 // Reconstruct display exchanges (one bubble-pair per turn) from the stored
 // flat user/assistant message list — mirrors web's messagesToExchanges().
@@ -122,6 +129,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!q || get().loading) return
     set({ loading: true })
 
+    const controller = new AbortController()
+    inFlight = controller
+
     const idx = get().history.length
     const m: ChatMsg = { query: q, answer: '', reasoning: '', sources: [], refused: false, streaming: true, queryPool: get().pool }
     set((s) => ({ history: [...s.history, m] }))
@@ -132,6 +142,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     streamQuery(q, {
       topK: RETRIEVE_K * 2, rerankTopK: RETRIEVE_K,
       pool: get().pool, conversationId: get().activeConversationId,
+      signal: controller.signal,
     }, {
       onSources: (s) => patch({ sources: s }),
       onThinking: (t) => patch({ reasoning: (get().history[idx]?.reasoning || '') + t }),
@@ -145,6 +156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           streaming: false,
         })
         if (d.conversation_id) set({ activeConversationId: d.conversation_id })
+        inFlight = null
         set({ loading: false })
         get().loadConversations()
         // This answer just consumed one of the day's AI questions — refresh
@@ -158,6 +170,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // already user-readable (see backend's _internal_error/rate-limit
         // messages); a raw network failure falls back to a generic message.
         patch({ streaming: false, error: e?.message || 'Something went wrong. Please try again.' })
+        inFlight = null
         set({ loading: false })
         // The backend counts a question at dispatch, before generation — so a
         // failed answer still spent quota. Refresh here too, or the indicator
@@ -165,5 +178,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
         queryClient.invalidateQueries({ queryKey: ['subscription'] })
       },
     })
+  },
+
+  stop: () => {
+    if (!get().loading || !inFlight) return
+    inFlight.abort()
+    inFlight = null
+    // Keep whatever text already streamed in — a stopped answer is partial,
+    // not failed, so it stays readable rather than being wiped or marked
+    // with an error.
+    set((s) => ({
+      loading: false,
+      history: s.history.map((h, i) => (i === s.history.length - 1 ? { ...h, streaming: false } : h)),
+    }))
+    // The backend charged a question at dispatch, so stopping doesn't refund
+    // it — refresh so the quota indicator reflects that honestly.
+    queryClient.invalidateQueries({ queryKey: ['subscription'] })
+  },
+
+  retry: () => {
+    if (get().loading) return
+    const last = get().history[get().history.length - 1]
+    if (!last) return
+    // Drop the failed/stopped turn before resending, so the same question
+    // doesn't appear twice in the transcript. Safe to discard: the backend
+    // only persists a turn once it completes (main.py only calls
+    // _persist_turn when final_data exists), so an errored or stopped turn
+    // was never written server-side.
+    set((s) => ({ history: s.history.slice(0, -1) }))
+    get().submit(last.query)
   },
 }))
