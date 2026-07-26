@@ -10,6 +10,11 @@ Answer pipeline — shared by ``POST /query`` (non-streaming) and
     ("refusal",  "<fixed refusal message>")    # instead of tokens, when gated out
     ("done",     {answer, reasoning, sources, refused, cached})
 
+A genuine generation failure (inference server unreachable/timed out/crashed
+mid-stream, as opposed to the model running fine and just producing nothing
+usable) instead **raises** ``GenerationFailedError`` rather than yielding —
+callers translate that into the right shape for their transport.
+
 ``answer_query`` drains that into a plain dict for the non-streaming route.
 
 The refusal gate runs **before** the model is ever called, and generation is
@@ -27,6 +32,22 @@ from generation import grounding
 from utils.config import config
 
 logger = logging.getLogger(__name__)
+
+
+class GenerationFailedError(Exception):
+    """
+    The LLM backend failed outright (inference server unreachable, timed
+    out, or crashed mid-stream) rather than producing a normal — possibly
+    empty — response. Distinct from the model successfully running and just
+    not producing usable text (still falls back to ranked passages, see
+    ``_fallback_answer``): this is a real backend outage the user needs to
+    be told about explicitly, not a raw passage dump that reads as a
+    working-but-strange answer.
+
+    Raised by ``stream_answer``; callers (``main.py``'s two query routes)
+    translate it into the right shape for their transport — an SSE ``error``
+    event for the stream, an HTTP 503 for the non-streaming route.
+    """
 
 
 def _sources_from(reranked: List[Any]) -> List[Dict[str, Any]]:
@@ -307,21 +328,30 @@ async def stream_answer(
     answer_parts: List[str] = []
     reasoning_parts: List[str] = []
 
-    async for token in llm.generate_stream(system_prompt, model_query, trimmed_history):
-        for phase, text in splitter.feed(token):
+    try:
+        async for token in llm.generate_stream(system_prompt, model_query, trimmed_history):
+            for phase, text in splitter.feed(token):
+                if phase == "thinking":
+                    reasoning_parts.append(text)
+                    yield ("thinking", text)
+                else:
+                    answer_parts.append(text)
+                    yield ("token", text)
+        for phase, text in splitter.flush():
             if phase == "thinking":
                 reasoning_parts.append(text)
                 yield ("thinking", text)
             else:
                 answer_parts.append(text)
                 yield ("token", text)
-    for phase, text in splitter.flush():
-        if phase == "thinking":
-            reasoning_parts.append(text)
-            yield ("thinking", text)
-        else:
-            answer_parts.append(text)
-            yield ("token", text)
+    except Exception as exc:
+        # Any tokens already yielded above already reached the client (an
+        # async generator's yield hands control back immediately) — that's
+        # fine, the client discards a partial answer once it sees the error
+        # that's about to be raised here. Not cached: this is a real failure,
+        # not an answer to remember.
+        logger.error(f"Generation failed mid-stream: {exc}")
+        raise GenerationFailedError(grounding.GENERATION_FAILED_MESSAGE) from exc
 
     answer = grounding.strip_trailing_refusal("".join(answer_parts).strip())
     reasoning = "".join(reasoning_parts).strip()

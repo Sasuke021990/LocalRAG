@@ -788,6 +788,11 @@ async def query_documents(request: QueryRequest, user_id: str = Depends(require_
         )
     except HTTPException:
         raise  # e.g. the 429 quota error, or a bad conversation_id — must not become a 500
+    except answer_pipeline.GenerationFailedError as exc:
+        # A genuine LLM backend outage — 503 with the friendly message
+        # rather than the generic _internal_error() correlation-ID response;
+        # this is a known, expected failure mode, not an unhandled bug.
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise _internal_error(exc, "Query error")
 
@@ -844,6 +849,10 @@ async def query_stream(http_request: Request, request: QueryRequest, user_id: st
                 # parses uniformly and newlines never break SSE framing.
                 yield {"event": event, "data": json.dumps(data)}
         except Exception as exc:
+            # Covers a GenerationFailedError from the pipeline (LLM backend
+            # down/timed out) the same as any other failure here — its
+            # str() is already the friendly GENERATION_FAILED_MESSAGE, so no
+            # special-casing needed to surface it correctly to the client.
             logger.error(f"Query stream error: {exc}")
             yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
             return

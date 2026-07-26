@@ -43,10 +43,13 @@ class FakeLLM:
     """Streams a canned output; records whether it was called (for gate tests),
     the last history it was given (for conversational-memory tests), the last
     user-turn text (for the thinking-directive tests), and the last per-call
-    model override (for the LLM_GRAPH_MODEL tests)."""
-    def __init__(self, output="", ready=True):
+    model override (for the LLM_GRAPH_MODEL tests). ``fails_with``, if set, is
+    raised after streaming ``output`` — simulates a backend that dies mid- or
+    pre-generation (see generation.llm's real backends, which do the same)."""
+    def __init__(self, output="", ready=True, fails_with: Exception = None):
         self.output = output
         self._ready = ready
+        self.fails_with = fails_with
         self.called = False
         self.last_system = None
         self.last_history = None
@@ -62,6 +65,8 @@ class FakeLLM:
         self.last_model = model
         for tok in self.output:   # yield char by char to exercise streaming
             yield tok
+        if self.fails_with:
+            raise self.fails_with
 
 
 async def _drain(**kw):
@@ -178,6 +183,70 @@ class TestGeneration:
         done = events[-1][1]
         assert done["cached"] is True
         assert done["answer"] == "cached answer"
+
+
+@pytest.mark.anyio
+class TestGenerationFailure:
+    """
+    Regression coverage for the "chat silently degrades to a raw passage
+    dump" bug (task.md's mobile-launch audit, §1i — identified root cause of
+    reported "chat not working"). A genuine backend failure (inference
+    server down/timed out/crashed) must surface as an explicit error, not a
+    scored-passage dump that reads as a working-but-strange answer.
+    """
+
+    async def test_failure_before_any_token_raises_generation_failed_error(self):
+        llm = FakeLLM(fails_with=ConnectionError("refused"))
+        with pytest.raises(pipeline.GenerationFailedError) as exc_info:
+            await _drain(**_base(llm=llm))
+        assert str(exc_info.value) == grounding.GENERATION_FAILED_MESSAGE
+
+    async def test_failure_mid_stream_raises_after_yielding_partial_tokens(self):
+        llm = FakeLLM(output="partial answer", fails_with=TimeoutError("timed out"))
+        events = []
+        with pytest.raises(pipeline.GenerationFailedError):
+            async for ev in pipeline.stream_answer(**_base(llm=llm)):
+                events.append(ev)
+        tokens = "".join(data for ev, data in events if ev == "token")
+        assert tokens == "partial answer"
+        # No "done" was ever reached — the failure aborted before it.
+        assert not any(ev == "done" for ev, _ in events)
+
+    async def test_failure_is_not_cached(self):
+        cache = FakeCache()
+        llm = FakeLLM(fails_with=ConnectionError("refused"))
+        with pytest.raises(pipeline.GenerationFailedError):
+            await _drain(**_base(semantic_cache=cache, llm=llm))
+        assert cache.saved == []
+
+    async def test_sources_still_reach_the_client_before_the_failure(self):
+        # sources is yielded before generation starts (step 2, before 4b) --
+        # a failed model call shouldn't hide what was actually retrieved.
+        llm = FakeLLM(fails_with=ConnectionError("refused"))
+        events = []
+        with pytest.raises(pipeline.GenerationFailedError):
+            async for ev in pipeline.stream_answer(**_base(llm=llm)):
+                events.append(ev)
+        assert events[0][0] == "sources"
+
+    async def test_answer_query_non_streaming_also_raises(self):
+        # The non-streaming route drains via answer_query — confirms the
+        # exception propagates through that drain loop too, not just
+        # stream_answer's direct consumers.
+        llm = FakeLLM(fails_with=ConnectionError("refused"))
+        with pytest.raises(pipeline.GenerationFailedError):
+            await pipeline.answer_query(**_base(llm=llm))
+
+    async def test_model_producing_only_reasoning_is_not_treated_as_a_failure(self, monkeypatch):
+        # Distinct from a real backend failure: the model ran fine and
+        # produced *something*, just no usable answer text. Must still fall
+        # back to ranked passages, not raise.
+        monkeypatch.setattr(config, "LLM_THINKING_ENABLED", True)
+        llm = FakeLLM("<think>only reasoning, no answer</think>")
+        events = await _drain(**_base(llm=llm))
+        done = events[-1][1]
+        assert done["refused"] is False
+        assert "relevant passage" in done["answer"].lower()  # _fallback_answer wording
 
 
 @pytest.mark.anyio

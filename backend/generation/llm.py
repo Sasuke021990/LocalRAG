@@ -18,8 +18,11 @@ Two backends, chosen by ``LLM_BACKEND``:
 
 Both expose the same ``generate_stream(system, user) -> AsyncIterator[str]`` /
 ``ready`` / ``ensure_loaded`` interface, so ``pipeline.py`` never knows which is
-in use. All errors degrade to "no tokens" (the pipeline then falls back to
-ranked passages) — generation never crashes a request.
+in use. A genuine failure (inference server unreachable, timed out, crashed
+mid-stream) is *raised* after any tokens already produced have been yielded —
+``pipeline.py`` catches it and turns it into an explicit "AI unavailable"
+error instead of the old silent fallback to a raw passage dump. A client
+disconnect (deliberate cancellation, not a failure) never raises.
 """
 
 import asyncio
@@ -120,6 +123,12 @@ class EmbeddedLLM(BaseLLM):
             # llama.cpp — burning generation time under the shared lock —
             # for an answer nobody will ever receive.
             cancel_event = threading.Event()
+            # A genuine failure caught in the background thread, marshaled
+            # back to this coroutine (a plain list, not `nonlocal`, since
+            # we only mutate its contents from the thread, never rebind the
+            # name). Left empty on a deliberate cancellation — that's not a
+            # failure to report.
+            error_box: list = []
 
             def _produce():
                 try:
@@ -137,6 +146,7 @@ class EmbeddedLLM(BaseLLM):
                 except Exception as exc:
                     if not cancel_event.is_set():
                         logger.error(f"Embedded generation failed: {exc}")
+                        error_box.append(exc)
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
@@ -152,6 +162,13 @@ class EmbeddedLLM(BaseLLM):
                 # already finished) and on early teardown via GeneratorExit
                 # when the caller stops iterating (client disconnect).
                 cancel_event.set()
+            if error_box:
+                # Only reachable past the try/finally above on normal
+                # completion of the loop (not on GeneratorExit from an early
+                # .aclose()), so this never fires for a plain disconnect —
+                # matches error_box only ever being populated by a genuine,
+                # uncancelled failure.
+                raise error_box[0]
 
 
 class OpenAICompatibleLLM(BaseLLM):
@@ -216,6 +233,12 @@ class OpenAICompatibleLLM(BaseLLM):
             # (and this thread would keep pulling tokens) for an answer
             # nobody will ever receive.
             cancel_event = threading.Event()
+            # A genuine failure caught in the background thread, marshaled
+            # back to this coroutine (a plain list, not `nonlocal`, since
+            # we only mutate its contents from the thread, never rebind the
+            # name). Left empty on a deliberate cancellation — that's not a
+            # failure to report.
+            error_box: list = []
 
             def _produce():
                 resp = None
@@ -246,6 +269,7 @@ class OpenAICompatibleLLM(BaseLLM):
                 except Exception as exc:
                     if not cancel_event.is_set():
                         logger.error(f"Inference-server generation failed: {exc}")
+                        error_box.append(exc)
                 finally:
                     if resp is not None:
                         # Actually closes the connection to the inference
@@ -266,6 +290,10 @@ class OpenAICompatibleLLM(BaseLLM):
                 # already finished) and on early teardown via GeneratorExit
                 # when the caller stops iterating (client disconnect).
                 cancel_event.set()
+            if error_box:
+                # See EmbeddedLLM's identical comment: only reachable on
+                # normal loop completion, never on an early .aclose().
+                raise error_box[0]
         finally:
             self._release()
 
