@@ -73,6 +73,16 @@ export default function SettingsScreen() {
     qc.clear()
   }
 
+  // Logging out is cheap to undo but annoying to trigger by accident — a
+  // stray tap used to end the session immediately, forcing a full re-login
+  // (task.md P2 #19).
+  function confirmLogout() {
+    Alert.alert('Log out?', "You'll need to sign in again to reach your documents.", [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log out', style: 'destructive', onPress: logoutAndClearCache },
+    ])
+  }
+
   async function save() {
     setErr('')
     if (next.length < 8) { setErr('New password must be at least 8 characters.'); return }
@@ -154,7 +164,7 @@ export default function SettingsScreen() {
 
       <Card style={{ gap: 12 }}>
         <Button title="View plans & billing" variant="secondary" onPress={() => nav.navigate('Billing')} />
-        <Button title="Log out" variant="danger" onPress={logoutAndClearCache} />
+        <Button title="Log out" variant="danger" onPress={confirmLogout} />
       </Card>
 
       <Card style={{ gap: 12, borderColor: colors.rose }}>

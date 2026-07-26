@@ -3,7 +3,7 @@ import { View, TextInput, StyleSheet, FlatList, Pressable, Text, KeyboardAvoidin
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import { useQuery } from '@tanstack/react-query'
-import { Send, Sparkles, History, FolderOpen, ChevronDown } from 'lucide-react-native'
+import { Send, Sparkles, History, FolderOpen, ChevronDown, SquarePen } from 'lucide-react-native'
 import ChatBubble from '../components/ChatBubble'
 import AiQuotaBar from '../components/AiQuotaBar'
 import PoolPickerModal from '../components/PoolPickerModal'
@@ -20,6 +20,7 @@ export default function ChatScreen() {
   const poolChosen = useChatStore((s) => s.poolChosen)
   const choosePool = useChatStore((s) => s.choosePool)
   const submit = useChatStore((s) => s.submit)
+  const newChat = useChatStore((s) => s.newChat)
   const { colors } = useAppTheme()
 
   const [text, setText] = useState('')
@@ -59,9 +60,19 @@ export default function ChatScreen() {
             <Text style={[styles.poolPillText, { color: colors.indigo }]} numberOfLines={1}>{pool || 'All pools'}</Text>
             <ChevronDown color={colors.indigo} size={14} />
           </Pressable>
-          <Pressable style={styles.historyBtn} onPress={() => navigation.navigate('Conversations')} hitSlop={8}>
-            <History color={colors.inkSoft} size={20} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            {/* Only useful once there's something to leave behind — the
+                previous-only route to this was buried inside the
+                Conversations sub-screen (task.md P2 #20). */}
+            {history.length > 0 && (
+              <Pressable style={styles.historyBtn} onPress={newChat} hitSlop={8} disabled={loading}>
+                <SquarePen color={loading ? colors.inkMuted : colors.inkSoft} size={20} />
+              </Pressable>
+            )}
+            <Pressable style={styles.historyBtn} onPress={() => navigation.navigate('Conversations')} hitSlop={8}>
+              <History color={colors.inkSoft} size={20} />
+            </Pressable>
+          </View>
         </View>
 
         {/* Daily AI allowance, counted down live as answers complete
@@ -125,6 +136,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 7,
   },
   poolPillText: { fontFamily: fonts.bodySemi, fontSize: 13, flexShrink: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   historyBtn: { padding: 4 },
   quotaStrip: { paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 10 },
